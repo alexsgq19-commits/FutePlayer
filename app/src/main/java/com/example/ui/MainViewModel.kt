@@ -122,6 +122,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         
+        repository.syncUpdateFromFirestore { url, version ->
+            _uiState.value = _uiState.value.copy(
+                latestApkUrl = url,
+                latestVersionName = version,
+                hasStoredApk = url.isNotBlank()
+            )
+        }
+        
         loadMatches(isRefresh = false)
         startNetworkMonitoring()
 
@@ -158,6 +166,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val user = _currentUser.value
                 if (user != null && user.isActive) {
                     userRepository.updateUserPresence(user.uid, isOnline = true)
+                }
+            }
+        }
+
+        // Monitora o status ativo do usuário atual em tempo real
+        viewModelScope.launch {
+            allUsers.collect { usersList ->
+                val current = _currentUser.value
+                if (current != null) {
+                    val updatedSelf = usersList.find { it.uid == current.uid }
+                    if (updatedSelf == null || !updatedSelf.isActive) {
+                        logout()
+                    }
                 }
             }
         }
@@ -637,6 +658,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             latestVersionName = versionName,
             hasStoredApk = cleanUrl.isNotBlank()
         )
+        
+        repository.publishUpdateToFirestore(cleanUrl, versionName)
 
         notificationManager.showAppUpdateNotification(versionName)
     }
@@ -658,7 +681,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (status != java.net.HttpURLConnection.HTTP_OK) {
                     if (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP
                         || status == java.net.HttpURLConnection.HTTP_MOVED_PERM
-                        || status == java.net.HttpURLConnection.HTTP_SEE_OTHER) {
+                        || status == java.net.HttpURLConnection.HTTP_SEE_OTHER
+                        || status == 307
+                        || status == 308) {
                         redirect = true
                     }
                 }
@@ -678,7 +703,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     status = connection.responseCode
                     if (status != java.net.HttpURLConnection.HTTP_MOVED_TEMP
                         && status != java.net.HttpURLConnection.HTTP_MOVED_PERM
-                        && status != java.net.HttpURLConnection.HTTP_SEE_OTHER) {
+                        && status != java.net.HttpURLConnection.HTTP_SEE_OTHER
+                        && status != 307
+                        && status != 308) {
                         redirect = false
                     }
                 }
@@ -713,6 +740,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (contentType != null && contentType.contains("text/html")) {
+                    if (url.host.contains("github.com") || url.host.contains("github")) {
+                        throw Exception("Erro: O GitHub retornou uma página web. Verifique se o Repositório é PÚBLICO (Repositórios privados bloqueiam o download).")
+                    }
                     // It's an HTML page, probably a Google Drive virus scan warning or invalid link
                     throw Exception("O link fornecido não é um arquivo APK válido (Página HTML retornada). O arquivo pode estar bloqueado ou precisar de permissões.")
                 }

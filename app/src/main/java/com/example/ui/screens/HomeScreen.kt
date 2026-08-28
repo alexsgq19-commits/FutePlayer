@@ -1365,35 +1365,37 @@ fun ChannelsGridContent(
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = {
-                                    editingChannel = channel
-                                    editTitleInput = channel.title
-                                    editSubtitleInput = channel.subtitle
-                                    editUrlInput = if (channel.streamUrl.isNotBlank()) channel.streamUrl else (channel.embedUrl ?: "")
-                                    editIsWebPlayer = channel.forceWebPlayer
-                                    val knownCategories = listOf("Esportes", "Católicos (CXTV)", "Desenhos & Kids", "Filmes & Séries", "Abertos & Regionais")
-                                    val curCategory = channel.category ?: "Esportes"
-                                    if (curCategory in knownCategories) {
-                                        editCategoryInput = curCategory
-                                        editCustomCategoryInput = ""
-                                    } else {
-                                        editCategoryInput = "Outros"
-                                        editCustomCategoryInput = curCategory
-                                    }
-                                    editErrorMessage = null
-                                    showEditDialog = true
-                                },
-                                modifier = Modifier.testTag("btn_edit_channel_${channel.id}")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "Editar Canal",
-                                    tint = StadiumCyanSecondary
-                                )
+                            if (isAdmin) {
+                                IconButton(
+                                    onClick = {
+                                        editingChannel = channel
+                                        editTitleInput = channel.title
+                                        editSubtitleInput = channel.subtitle
+                                        editUrlInput = if (channel.streamUrl.isNotBlank()) channel.streamUrl else (channel.embedUrl ?: "")
+                                        editIsWebPlayer = channel.forceWebPlayer
+                                        val knownCategories = listOf("Esportes", "Católicos (CXTV)", "Desenhos & Kids", "Filmes & Séries", "Abertos & Regionais")
+                                        val curCategory = channel.category ?: "Esportes"
+                                        if (curCategory in knownCategories) {
+                                            editCategoryInput = curCategory
+                                            editCustomCategoryInput = ""
+                                        } else {
+                                            editCategoryInput = "Outros"
+                                            editCustomCategoryInput = curCategory
+                                        }
+                                        editErrorMessage = null
+                                        showEditDialog = true
+                                    },
+                                    modifier = Modifier.testTag("btn_edit_channel_${channel.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Editar Canal",
+                                        tint = StadiumCyanSecondary
+                                    )
+                                }
                             }
 
-                            if (isAdmin || isCustom) {
+                            if (isAdmin) {
                                 IconButton(
                                     onClick = {
                                         channelToDelete = channel

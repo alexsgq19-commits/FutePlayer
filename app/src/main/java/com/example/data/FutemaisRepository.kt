@@ -83,6 +83,31 @@ class FutemaisRepository(context: Context) {
             }
     }
 
+    fun syncUpdateFromFirestore(onUpdateFound: (url: String, version: String) -> Unit) {
+        firestore?.collection("app_data")?.document("update_info")?.get()
+            ?.addOnSuccessListener { doc ->
+                if (doc.exists()) {
+                    val url = doc.getString("latest_apk_url") ?: ""
+                    val version = doc.getString("latest_version_name") ?: ""
+                    if (url.isNotBlank() && version.isNotBlank()) {
+                        val editor = prefs.edit()
+                        editor.putString("latest_apk_url", url)
+                        editor.putString("latest_version_name", version)
+                        editor.apply()
+                        onUpdateFound(url, version)
+                    }
+                }
+            }
+    }
+
+    fun publishUpdateToFirestore(url: String, version: String) {
+        val data = hashMapOf(
+            "latest_apk_url" to url,
+            "latest_version_name" to version
+        )
+        firestore?.collection("app_data")?.document("update_info")?.set(data)
+    }
+
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
