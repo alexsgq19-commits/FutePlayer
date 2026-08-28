@@ -84,20 +84,20 @@ class FutemaisRepository(context: Context) {
     }
 
     fun syncUpdateFromFirestore(onUpdateFound: (url: String, version: String) -> Unit) {
-        firestore?.collection("app_data")?.document("update_info")?.get()
-            ?.addOnSuccessListener { doc ->
-                if (doc.exists()) {
-                    val url = doc.getString("latest_apk_url") ?: ""
-                    val version = doc.getString("latest_version_name") ?: ""
-                    if (url.isNotBlank() && version.isNotBlank()) {
-                        val editor = prefs.edit()
-                        editor.putString("latest_apk_url", url)
-                        editor.putString("latest_version_name", version)
-                        editor.apply()
-                        onUpdateFound(url, version)
-                    }
+        firestore?.collection("app_data")?.document("update_info")?.addSnapshotListener { doc, error ->
+            if (error != null) return@addSnapshotListener
+            if (doc != null && doc.exists()) {
+                val url = doc.getString("latest_apk_url") ?: ""
+                val version = doc.getString("latest_version_name") ?: ""
+                if (url.isNotBlank() && version.isNotBlank()) {
+                    val editor = prefs.edit()
+                    editor.putString("latest_apk_url", url)
+                    editor.putString("latest_version_name", version)
+                    editor.apply()
+                    onUpdateFound(url, version)
                 }
             }
+        }
     }
 
     fun publishUpdateToFirestore(url: String, version: String) {

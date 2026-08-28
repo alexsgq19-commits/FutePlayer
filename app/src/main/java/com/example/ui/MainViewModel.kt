@@ -128,6 +128,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 latestVersionName = version,
                 hasStoredApk = url.isNotBlank()
             )
+            val lastNotifiedVersion = sharedPrefs.getString("last_notified_version", "")
+            if (version.isNotBlank() && version != lastNotifiedVersion && version != "1.0.0") {
+                notificationManager.showAppUpdateNotification(version)
+                sharedPrefs.edit().putString("last_notified_version", version).apply()
+            }
         }
         
         loadMatches(isRefresh = false)
@@ -651,6 +656,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sharedPrefs.edit()
             .putString("latest_apk_url", cleanUrl)
             .putString("latest_version_name", versionName)
+            .putString("last_notified_version", versionName)
             .apply()
 
         _uiState.value = _uiState.value.copy(

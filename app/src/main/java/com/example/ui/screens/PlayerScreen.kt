@@ -887,7 +887,6 @@ fun PlayerScreen(
                                                         castUiState = castUiState,
                                                         onCastConnectedClick = { onCastToggle() }
                                                     )
-
                                                     Spacer(modifier = Modifier.width(6.dp))
 
                                                     // Formato de Tela (Aspect ratio)
@@ -971,7 +970,6 @@ fun PlayerScreen(
                                         castUiState = castUiState,
                                         onCastConnectedClick = { onCastToggle() }
                                     )
-
                                     Spacer(modifier = Modifier.width(8.dp))
 
                                     // Aspect ratio toggle
