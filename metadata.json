@@ -1,0 +1,6 @@
+{
+  "name": "FutePlayer",
+  "description": "Aplicativo de reprodução de vídeo com suporte a transmissão Chromecast e catálogo de jogos ao vivo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
