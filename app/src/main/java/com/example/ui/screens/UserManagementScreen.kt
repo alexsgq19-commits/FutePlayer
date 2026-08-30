@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.models.User
 import com.example.ui.theme.StadiumGreenPrimary
+import kotlinx.coroutines.delay
 
 enum class UserPresenceFilter(val label: String) {
     ALL("Todos"),
@@ -53,17 +54,25 @@ fun UserManagementScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf(UserPresenceFilter.ALL) }
 
-    val onlineUsersCount = remember(users) { users.count { it.isCurrentlyOnline() } }
+    var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(5000L)
+            currentTime = System.currentTimeMillis()
+        }
+    }
+
+    val onlineUsersCount = remember(users, currentTime) { users.count { it.isCurrentlyOnline(currentTime) } }
     val offlineUsersCount = remember(users, onlineUsersCount) { (users.size - onlineUsersCount).coerceAtLeast(0) }
 
-    val filteredUsers = remember(users, searchQuery, selectedFilter) {
+    val filteredUsers = remember(users, searchQuery, selectedFilter, currentTime) {
         users.filter { user ->
             val matchesSearch = searchQuery.isBlank() ||
                     user.name.contains(searchQuery, ignoreCase = true) ||
                     user.cpf.contains(searchQuery, ignoreCase = true) ||
                     user.role.contains(searchQuery, ignoreCase = true)
 
-            val isOnline = user.isCurrentlyOnline()
+            val isOnline = user.isCurrentlyOnline(currentTime)
             val matchesFilter = when (selectedFilter) {
                 UserPresenceFilter.ALL -> true
                 UserPresenceFilter.ONLINE -> isOnline
@@ -74,7 +83,7 @@ fun UserManagementScreen(
 
             matchesSearch && matchesFilter
         }.sortedWith(
-            compareByDescending<User> { it.isCurrentlyOnline() }
+            compareByDescending<User> { it.isCurrentlyOnline(currentTime) }
                 .thenByDescending { it.lastSeen }
                 .thenBy { it.name }
         )
@@ -362,7 +371,7 @@ fun UserManagementScreen(
                     }
                 } else {
                     items(filteredUsers, key = { it.uid }) { user ->
-                        val isOnline = user.isCurrentlyOnline()
+                        val isOnline = user.isCurrentlyOnline(currentTime)
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -502,7 +511,7 @@ fun UserManagementScreen(
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
                                             Text(
-                                                text = if (isOnline) "Ativo no aplicativo agora" else "Última vez online: ${user.getFormattedLastSeen()}",
+                                                text = if (isOnline) "Ativo no aplicativo agora" else "Última vez online: ${user.getFormattedLastSeen(currentTime)}",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 fontWeight = FontWeight.Bold,
                                                 color = if (isOnline) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurface

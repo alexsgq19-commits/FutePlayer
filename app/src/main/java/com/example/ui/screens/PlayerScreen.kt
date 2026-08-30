@@ -1,9 +1,11 @@
 package com.example.ui.screens
 
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.net.Uri
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -11,6 +13,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.annotation.OptIn
+import com.example.data.MoviesRepository
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
@@ -33,6 +36,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -40,21 +47,24 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CastConnected
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.TvOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -64,14 +74,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -106,9 +120,11 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.example.R
 import com.example.cast.CastUiState
 import com.example.data.models.PlayableVideo
 import com.example.ui.components.ChromecastButton
+import com.example.ui.components.WebVideoCasterButton
 import com.example.ui.theme.StadiumAccentRed
 import com.example.ui.theme.StadiumCyanSecondary
 import com.example.ui.theme.StadiumGreenPrimary
@@ -142,6 +158,13 @@ fun PlayerScreen(
     var useWebviewPlayer by remember(video.streamUrl, video.embedUrl, video.forceWebPlayer, hasDirectMediaUrl) { 
         mutableStateOf(video.forceWebPlayer || (!hasDirectMediaUrl && !video.embedUrl.isNullOrBlank())) 
     }
+    var activeEmbedUrl by remember(video.embedUrl, video.streamUrl) {
+        mutableStateOf(video.embedUrl?.takeIf { it.isNotBlank() } ?: video.streamUrl)
+    }
+    var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    var isWebViewLoading by remember { mutableStateOf(true) }
+    var isWebViewError by remember { mutableStateOf(false) }
+
     var resizeMode by remember { mutableStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
 
     var currentPositionMs by remember { mutableLongStateOf(0L) }
@@ -199,8 +222,13 @@ fun PlayerScreen(
             video.headers.forEach { (k, v) ->
                 headerMap[k] = v
             }
+            // Only add Referer if explicitly specified in headers, or if streamUrl and embedUrl share the same host
             if (!headerMap.containsKey("Referer") && !video.embedUrl.isNullOrBlank()) {
-                headerMap["Referer"] = video.embedUrl
+                val streamHost = try { Uri.parse(video.streamUrl).host } catch (_: Exception) { null }
+                val embedHost = try { Uri.parse(video.embedUrl).host } catch (_: Exception) { null }
+                if (streamHost != null && embedHost != null && streamHost.equals(embedHost, ignoreCase = true)) {
+                    headerMap["Referer"] = video.embedUrl
+                }
             }
             httpDataSourceFactory.setDefaultRequestProperties(headerMap)
 
@@ -239,7 +267,7 @@ fun PlayerScreen(
                 .build()
 
             val renderersFactory = DefaultRenderersFactory(context)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
                 .setEnableDecoderFallback(true)
 
             ExoPlayer.Builder(context, renderersFactory)
@@ -317,202 +345,281 @@ fun PlayerScreen(
             // ISOLATED WEB PLAYER (PURE VIDEO ONLY)
             // ==========================================
             Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { ctx ->
-                        try {
-                            java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/js").mkdirs()
-                            java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm").mkdirs()
-                        } catch (_: Exception) {}
+                key(activeEmbedUrl, isWebViewError) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            try {
+                                java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/js").mkdirs()
+                                java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm").mkdirs()
+                            } catch (_: Exception) {}
 
-                        WebView(ctx).apply {
-                            layoutParams = ViewGroup.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.databaseEnabled = true
-                            settings.cacheMode = WebSettings.LOAD_DEFAULT
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
-                            webChromeClient = WebChromeClient()
-                            webViewClient = object : WebViewClient() {
-                                override fun onPageFinished(view: WebView?, url: String?) {
-                                    super.onPageFinished(view, url)
-                                    // Extreme DOM isolation: strip all layout, ads, menus, headers, footers, and zoom player/iframe/video to 100vw x 100vh
-                                    view?.evaluateJavascript(
-                                        """
-                                        (function() {
-                                            function isolateAndPlayVideo() {
-                                                // Inject CSS reset to hide everything except the video element or iframe
-                                                if (!document.getElementById('pure-video-style')) {
-                                                    var style = document.createElement('style');
-                                                    style.id = 'pure-video-style';
-                                                    style.innerHTML = `
-                                                        * { box-sizing: border-box !important; }
-                                                        header, footer, nav, aside, .sidebar, .menu, .ads, .anuncio, .banner,
-                                                        .topo, .rodape, .compartilhar, .comentarios, .related, .navbar, .top-bar,
-                                                        .header, .footer, .container-header, .site-header, .site-footer,
-                                                        #header, #footer, #sidebar, .social-share, .tags, .breadcrumbs,
-                                                        .cxtv-header, .cxtv-menu, .cxtv-footer, .cxtv-chat, .cxtv-anuncios,
-                                                        div[class*="ad-"], div[id*="ad-"], div[class*="banner"], div[id*="banner"] { 
-                                                            display: none !important; 
-                                                            visibility: hidden !important; 
-                                                            height: 0 !important; 
-                                                            width: 0 !important; 
-                                                            pointer-events: none !important; 
-                                                        }
-                                                        html, body { 
-                                                            background: #000000 !important; 
-                                                            margin: 0 !important; 
-                                                            padding: 0 !important; 
-                                                            overflow: hidden !important; 
-                                                            width: 100vw !important; 
-                                                            height: 100vh !important; 
-                                                        }
-                                                        /* Expand the video or active player directly */
-                                                        video, 
-                                                        iframe[src*="player"], 
-                                                        iframe[src*="embed"], 
-                                                        iframe[src*="stream"], 
-                                                        iframe[src*="youtube"],
-                                                        iframe[src*="live"],
-                                                        .player, #player, #webPlayer, .video-container, .dplayer-video-wrap,
-                                                        .cxtv-player, #cxtv-player, .embed-responsive, .vjs-tech { 
-                                                            position: fixed !important; 
-                                                            top: 0 !important; 
-                                                            left: 0 !important; 
-                                                            width: 100vw !important; 
-                                                            height: 100vh !important; 
-                                                            max-width: 100vw !important;
-                                                            max-height: 100vh !important;
-                                                            z-index: 2147483647 !important; 
-                                                            object-fit: contain !important; 
-                                                            background: #000000 !important; 
-                                                        }
-                                                    `;
-                                                    document.head.appendChild(style);
-                                                }
+                            WebView(ctx).apply {
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                                setBackgroundColor(android.graphics.Color.BLACK)
+                                try {
+                                    setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                } catch (_: Exception) {}
 
-                                                // If an iframe contains the stream, give it top priority
-                                                var iframes = document.querySelectorAll('iframe');
-                                                iframes.forEach(function(ifr) {
-                                                    ifr.style.position = 'fixed';
-                                                    ifr.style.top = '0px';
-                                                    ifr.style.left = '0px';
-                                                    ifr.style.width = '100vw';
-                                                    ifr.style.height = '100vh';
-                                                    ifr.style.zIndex = '2147483647';
-                                                    ifr.style.background = '#000';
-                                                });
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.databaseEnabled = true
+                                settings.cacheMode = WebSettings.LOAD_DEFAULT
+                                settings.mediaPlaybackRequiresUserGesture = false
+                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                settings.setSupportMultipleWindows(true)
+                                settings.setJavaScriptCanOpenWindowsAutomatically(true)
+                                settings.loadWithOverviewMode = true
+                                settings.useWideViewPort = true
+                                settings.allowContentAccess = true
+                                settings.allowFileAccess = false
+                                try {
+                                    settings.safeBrowsingEnabled = false
+                                } catch (_: Exception) {}
+                                
+                                try {
+                                    android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                                    android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                                } catch (_: Exception) {}
 
-                                                // Trigger auto-playback on any video tag found
-                                                var videos = document.querySelectorAll('video');
-                                                videos.forEach(function(v) {
-                                                    v.style.position = 'fixed';
-                                                    v.style.top = '0px';
-                                                    v.style.left = '0px';
-                                                    v.style.width = '100vw';
-                                                    v.style.height = '100vh';
-                                                    v.style.zIndex = '2147483647';
-                                                    v.style.objectFit = 'contain';
-                                                    v.play().catch(function(e) { console.log('Autoplay handled', e); });
-                                                });
+                                webChromeClient = WebChromeClient()
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        request: android.webkit.WebResourceRequest?
+                                    ): Boolean {
+                                        val reqUrl = request?.url?.toString() ?: return false
+                                        // Block intrusive redirects and store schemes
+                                        if (reqUrl.startsWith("intent:") || reqUrl.startsWith("market:") || reqUrl.startsWith("whatsapp:") || reqUrl.startsWith("tg:")) {
+                                            return true
+                                        }
+                                        return false
+                                    }
 
-                                                // Auto-click play overlay buttons if present
-                                                var playButtons = document.querySelectorAll('.vjs-big-play-button, .play-button, .btn-play, [class*="play-btn"], button[aria-label="Play"]');
-                                                playButtons.forEach(function(btn) {
-                                                    try { btn.click(); } catch(e) {}
-                                                });
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                        super.onPageStarted(view, url, favicon)
+                                        isWebViewLoading = true
+                                        isWebViewError = false
+                                    }
+
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        isWebViewLoading = false
+                                    }
+
+                                    override fun onReceivedError(
+                                        view: WebView?,
+                                        request: android.webkit.WebResourceRequest?,
+                                        error: android.webkit.WebResourceError?
+                                    ) {
+                                        super.onReceivedError(view, request, error)
+                                        if (request?.isForMainFrame == true) {
+                                            isWebViewLoading = false
+                                        }
+                                    }
+
+                                    override fun onRenderProcessGone(
+                                        view: WebView?,
+                                        detail: android.webkit.RenderProcessGoneDetail?
+                                    ): Boolean {
+                                        // Crucial: return true so Chromium renderer crashes do not kill the host app
+                                        try {
+                                            view?.let {
+                                                (it.parent as? ViewGroup)?.removeView(it)
+                                                it.destroy()
                                             }
+                                        } catch (_: Exception) {}
+                                        webViewInstance = null
+                                        isWebViewLoading = false
+                                        isWebViewError = true
+                                        return true
+                                    }
+                                }
 
-                                            isolateAndPlayVideo();
-                                            // Re-run after delayed scripts load
-                                            setTimeout(isolateAndPlayVideo, 1000);
-                                            setTimeout(isolateAndPlayVideo, 2500);
-                                            setTimeout(isolateAndPlayVideo, 5000);
-                                        })();
-                                        """.trimIndent(),
-                                        null
-                                    )
+                                val targetStream = activeEmbedUrl.ifBlank { video.streamUrl }
+                                val isFutemais = targetStream.contains("futemais", ignoreCase = true) || targetStream.contains("temporariofutemais", ignoreCase = true)
+                                val isDirectMedia = (
+                                    targetStream.contains(".m3u8", ignoreCase = true) || 
+                                    targetStream.contains(".mp4", ignoreCase = true) ||
+                                    targetStream.contains(".ts", ignoreCase = true)
+                                ) && !isFutemais
+
+                                if (isFutemais) {
+                                    loadUrl(targetStream, mapOf("Referer" to "https://futemais.link/"))
+                                } else if (isDirectMedia) {
+                                    val htmlData = """
+                                        <!DOCTYPE html>
+                                        <html>
+                                        <head>
+                                            <meta charset="utf-8">
+                                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                                            <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+                                            <style>
+                                                * { box-sizing: border-box; margin: 0; padding: 0; }
+                                                html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+                                                video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+                                            </style>
+                                        </head>
+                                        <body>
+                                            <video id="webPlayer" controls autoplay playsinline></video>
+                                            <script>
+                                                var video = document.getElementById('webPlayer');
+                                                var sourceUrl = '$targetStream';
+                                                if (Hls.isSupported()) {
+                                                    var hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+                                                    hls.loadSource(sourceUrl);
+                                                    hls.attachMedia(video);
+                                                    hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                                                        video.play().catch(function(e) { console.log(e); });
+                                                    });
+                                                    hls.on(Hls.Events.ERROR, function(event, data) {
+                                                        if (data.fatal) {
+                                                            switch (data.type) {
+                                                                case Hls.ErrorTypes.NETWORK_ERROR:
+                                                                    hls.startLoad();
+                                                                    break;
+                                                                case Hls.ErrorTypes.MEDIA_ERROR:
+                                                                    hls.recoverMediaError();
+                                                                    break;
+                                                                default:
+                                                                    hls.destroy();
+                                                                    break;
+                                                                }
+                                                        }
+                                                    });
+                                                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                                                    video.src = sourceUrl;
+                                                    video.play().catch(function(e) { console.log(e); });
+                                                } else {
+                                                    video.src = sourceUrl;
+                                                    video.play().catch(function(e) { console.log(e); });
+                                                }
+                                            </script>
+                                        </body>
+                                        </html>
+                                    """.trimIndent()
+                                    loadDataWithBaseURL("https://autoembed.co", htmlData, "text/html", "UTF-8", null)
+                                } else {
+                                                                         val iframeHtml = """
+                                         <!DOCTYPE html>
+                                         <html>
+                                         <head>
+                                             <meta charset="utf-8">
+                                             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                                             <style>
+                                                 * { box-sizing: border-box; margin: 0; padding: 0; }
+                                                 html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+                                                 iframe { width: 100%; height: 100%; border: none; background: #000; }
+                                             </style>
+                                         </head>
+                                         <body>
+                                             <iframe src="$targetStream" allowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
+                                         </body>
+                                         </html>
+                                     """.trimIndent()
+                                     loadDataWithBaseURL("https://autoembed.co", iframeHtml, "text/html", "UTF-8", null)
+                                }
+                            }.also { webViewInstance = it }
+                        },
+                        update = { webView ->
+                            webViewInstance = webView
+                        },
+                        onRelease = { webView ->
+                            try {
+                                webView.stopLoading()
+                                webView.loadUrl("about:blank")
+                                webView.clearHistory()
+                                webView.removeAllViews()
+                                webView.destroy()
+                            } catch (_: Exception) {}
+                        }
+                    )
+                }
+
+                if (isWebViewLoading && !isWebViewError) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.4f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = StadiumGreenPrimary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
+                }
+
+                if (isWebViewError) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.85f))
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.widthIn(max = 420.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Erro no reprodutor",
+                                    tint = StadiumGreenPrimary,
+                                    modifier = Modifier.size(44.dp)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "Falha no servidor atual",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "O servidor selecionado demorou para responder ou falhou no carregamento. Tente outro servidor ou use o Web Video Caster.",
+                                    fontSize = 13.sp,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                     Button(
+                                        onClick = {
+                                            isWebViewError = false
+                                            isWebViewLoading = true
+                                            webViewInstance?.reload()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Recarregar", color = Color.Black, fontWeight = FontWeight.Bold)
+                                    }
+                                    TextButton(
+                                        onClick = { useWebviewPlayer = false },
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text("Player Nativo", color = StadiumGreenPrimary)
+                                    }
                                 }
                             }
-
-                            val targetStream = video.streamUrl.ifBlank { video.embedUrl ?: "" }
-                            val isDirectMedia = targetStream.contains(".m3u8", ignoreCase = true) || 
-                                                targetStream.contains(".mp4", ignoreCase = true) ||
-                                                targetStream.contains(".ts", ignoreCase = true)
-
-                            if (isDirectMedia) {
-                                val htmlData = """
-                                    <!DOCTYPE html>
-                                    <html>
-                                    <head>
-                                        <meta charset="utf-8">
-                                        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                                        <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-                                        <style>
-                                            * { box-sizing: border-box; margin: 0; padding: 0; }
-                                            html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-                                            video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-                                        </style>
-                                    </head>
-                                    <body>
-                                        <video id="webPlayer" controls autoplay playsinline></video>
-                                        <script>
-                                            var video = document.getElementById('webPlayer');
-                                            var sourceUrl = '$targetStream';
-                                            if (Hls.isSupported()) {
-                                                var hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-                                                hls.loadSource(sourceUrl);
-                                                hls.attachMedia(video);
-                                                hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                                                    video.play().catch(function(e) { console.log(e); });
-                                                });
-                                                hls.on(Hls.Events.ERROR, function(event, data) {
-                                                    if (data.fatal) {
-                                                        switch (data.type) {
-                                                            case Hls.ErrorTypes.NETWORK_ERROR:
-                                                                hls.startLoad();
-                                                                break;
-                                                            case Hls.ErrorTypes.MEDIA_ERROR:
-                                                                hls.recoverMediaError();
-                                                                break;
-                                                            default:
-                                                                hls.destroy();
-                                                                break;
-                                                        }
-                                                    }
-                                                });
-                                            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                                                video.src = sourceUrl;
-                                                video.play().catch(function(e) { console.log(e); });
-                                            } else {
-                                                video.src = sourceUrl;
-                                                video.play().catch(function(e) { console.log(e); });
-                                            }
-                                        </script>
-                                    </body>
-                                    </html>
-                                """.trimIndent()
-                                loadDataWithBaseURL("https://cxtv.com.br", htmlData, "text/html", "UTF-8", null)
-                            } else {
-                                loadUrl(if (!video.embedUrl.isNullOrBlank()) video.embedUrl else video.streamUrl)
-                            }
                         }
-                    },
-                    onRelease = { webView ->
-                        try {
-                            webView.stopLoading()
-                            webView.loadUrl("about:blank")
-                            webView.clearHistory()
-                            webView.removeAllViews()
-                            webView.destroy()
-                        } catch (_: Exception) {}
                     }
-                )
+                }
 
                 // Top overlay for Webview
                 Row(
@@ -538,6 +645,35 @@ fun PlayerScreen(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Refresh / Reload stream
+                        IconButton(
+                            onClick = { 
+                                isWebViewLoading = true
+                                webViewInstance?.reload() 
+                            },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .testTag("webview_reload_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Recarregar",
+                                tint = Color.White
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Web Video Caster
+                        WebVideoCasterButton(
+                            streamUrl = activeEmbedUrl.ifBlank { video.streamUrl },
+                            title = video.title
+                        )
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
                         IconButton(
                             onClick = { toggleFullscreen() },
                             modifier = Modifier
@@ -553,99 +689,80 @@ fun PlayerScreen(
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
-                        if (isLandscape) {
-                            // Collapsible in landscape/fullscreen
-                            if (!areExtraActionsExpanded) {
+                        // Collapsible options menu in both portrait and landscape
+                        if (!areExtraActionsExpanded) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.65f),
+                                shape = RoundedCornerShape(20.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                                modifier = Modifier
+                                    .clickable { areExtraActionsExpanded = true }
+                                    .testTag("btn_expand_webview_options")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = "Opções do Player",
+                                        tint = StadiumGreenPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            AnimatedVisibility(
+                                visible = areExtraActionsExpanded,
+                                enter = fadeIn() + expandHorizontally(),
+                                exit = fadeOut() + shrinkHorizontally()
+                            ) {
                                 Surface(
-                                    color = Color.Black.copy(alpha = 0.65f),
+                                    color = Color.Black.copy(alpha = 0.85f),
                                     shape = RoundedCornerShape(20.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
-                                    modifier = Modifier
-                                        .clickable { areExtraActionsExpanded = true }
-                                        .testTag("btn_expand_webview_options")
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.5f)),
+                                    modifier = Modifier.padding(start = 4.dp)
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Tune,
-                                            contentDescription = "Opções do Player",
-                                            tint = StadiumGreenPrimary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
+                                        ChromecastButton(castUiState = castUiState)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "Opções",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                            } else {
-                                AnimatedVisibility(
-                                    visible = areExtraActionsExpanded,
-                                    enter = fadeIn() + expandHorizontally(),
-                                    exit = fadeOut() + shrinkHorizontally()
-                                ) {
-                                    Surface(
-                                        color = Color.Black.copy(alpha = 0.85f),
-                                        shape = RoundedCornerShape(20.dp),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.5f)),
-                                        modifier = Modifier.padding(start = 4.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        WebVideoCasterButton(streamUrl = activeEmbedUrl.ifBlank { video.streamUrl }, title = video.title)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Button(
+                                            onClick = { 
+                                                areExtraActionsExpanded = false
+                                                useWebviewPlayer = false 
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(34.dp).testTag("btn_switch_native_player")
                                         ) {
-                                            ChromecastButton(castUiState = castUiState)
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Button(
-                                                onClick = { 
-                                                    areExtraActionsExpanded = false
-                                                    useWebviewPlayer = false 
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
-                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                                modifier = Modifier.height(34.dp).testTag("btn_switch_native_player")
-                                            ) {
-                                                Text("Usar Player Nativo", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                            }
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            IconButton(
-                                                onClick = { areExtraActionsExpanded = false },
-                                                modifier = Modifier.size(30.dp).testTag("btn_collapse_webview_options")
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = "Recolher Opções",
-                                                    tint = Color.White.copy(alpha = 0.8f),
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
+                                            Text("Nativo", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        IconButton(
+                                            onClick = { areExtraActionsExpanded = false },
+                                            modifier = Modifier.size(30.dp).testTag("btn_collapse_webview_options")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Recolher Opções",
+                                                tint = Color.White.copy(alpha = 0.8f),
+                                                modifier = Modifier.size(18.dp)
+                                            )
                                         }
                                     }
                                 }
                             }
-                        } else {
-                            ChromecastButton(castUiState = castUiState)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Button(
-                                onClick = { 
-                                    areExtraActionsExpanded = false
-                                    useWebviewPlayer = false 
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
-                                modifier = Modifier.testTag("btn_switch_native_player_portrait")
-                            ) {
-                                Text("Usar Player Nativo", color = Color.Black)
-                            }
                         }
                     }
                 }
+
             }
         } else {
             // ==========================================
@@ -665,7 +782,8 @@ fun PlayerScreen(
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
+                        val view = android.view.LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null)
+                        view.findViewById<PlayerView>(R.id.player_view).apply {
                             player = exoPlayer
                             useController = false
                             this.resizeMode = resizeMode
@@ -676,8 +794,9 @@ fun PlayerScreen(
                         }
                     },
                     update = { view ->
-                        view.player = exoPlayer
-                        view.resizeMode = resizeMode
+                        val playerView = view.findViewById<PlayerView>(R.id.player_view)
+                        playerView.player = exoPlayer
+                        playerView.resizeMode = resizeMode
                     }
                 )
 
@@ -707,7 +826,7 @@ fun PlayerScreen(
                             modifier = Modifier.padding(24.dp)
                         ) {
                             Text(
-                                text = "Falha ao carregar o fluxo ao vivo",
+                                text = if (video.isLive) "Falha ao carregar a transmissão" else "Falha ao carregar o vídeo",
                                 color = Color.White,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
@@ -818,202 +937,151 @@ fun PlayerScreen(
                             Row(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (isLandscape) {
-                                    // Screen rotation button in top bar
-                                    IconButton(
-                                        onClick = { toggleFullscreen() },
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.Black.copy(alpha = 0.5f))
-                                            .testTag("player_top_rotate_btn")
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.ScreenRotation,
-                                            contentDescription = "Rotacionar Tela",
-                                            tint = Color.White
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.width(8.dp))
-
-                                    // Collapsible in landscape/fullscreen
-                                    if (!areExtraActionsExpanded) {
-                                        Surface(
-                                            color = Color.Black.copy(alpha = 0.65f),
-                                            shape = RoundedCornerShape(20.dp),
-                                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
-                                            modifier = Modifier
-                                                .clickable { areExtraActionsExpanded = true }
-                                                .testTag("btn_expand_player_options")
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Tune,
-                                                    contentDescription = "Opções do Player",
-                                                    tint = StadiumGreenPrimary,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    text = "Opções",
-                                                    color = Color.White,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        AnimatedVisibility(
-                                            visible = areExtraActionsExpanded,
-                                            enter = fadeIn() + expandHorizontally(),
-                                            exit = fadeOut() + shrinkHorizontally()
-                                        ) {
-                                            Surface(
-                                                color = Color.Black.copy(alpha = 0.85f),
-                                                shape = RoundedCornerShape(20.dp),
-                                                border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.5f)),
-                                                modifier = Modifier.padding(start = 4.dp)
-                                            ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                ) {
-                                                    // Transmitir (Chromecast)
-                                                    ChromecastButton(
-                                                        castUiState = castUiState,
-                                                        onCastConnectedClick = { onCastToggle() }
-                                                    )
-                                                    Spacer(modifier = Modifier.width(6.dp))
-
-                                                    // Formato de Tela (Aspect ratio)
-                                                    IconButton(
-                                                        onClick = {
-                                                            resizeMode = when (resizeMode) {
-                                                                AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                                                AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                                                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                                            }
-                                                        },
-                                                        modifier = Modifier.size(36.dp).testTag("btn_aspect_ratio")
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.AspectRatio,
-                                                            contentDescription = "Formato de Tela",
-                                                            tint = Color.White
-                                                        )
-                                                    }
-
-                                                    // Usar Player Web
-                                                    if (!video.embedUrl.isNullOrBlank() || video.streamUrl.isNotBlank()) {
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Button(
-                                                            onClick = { 
-                                                                areExtraActionsExpanded = false
-                                                                useWebviewPlayer = true 
-                                                            },
-                                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                                            modifier = Modifier.height(34.dp).testTag("btn_switch_web_player")
-                                                        ) {
-                                                            Icon(
-                                                                Icons.Default.Language,
-                                                                contentDescription = null,
-                                                                modifier = Modifier.size(16.dp),
-                                                                tint = Color.White
-                                                            )
-                                                            Spacer(modifier = Modifier.width(4.dp))
-                                                            Text("Player Web", color = Color.White, fontSize = 12.sp)
-                                                        }
-                                                    }
-
-                                                    // Recarregar Stream
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    IconButton(
-                                                        onClick = {
-                                                            errorMessage = null
-                                                            exoPlayer?.prepare()
-                                                            exoPlayer?.play()
-                                                        },
-                                                        modifier = Modifier.size(36.dp).testTag("btn_reload_stream")
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Refresh,
-                                                            contentDescription = "Recarregar Transmissão",
-                                                            tint = Color.White
-                                                        )
-                                                    }
-
-                                                    // Botão Recolher Opções
-                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                    IconButton(
-                                                        onClick = { areExtraActionsExpanded = false },
-                                                        modifier = Modifier.size(30.dp).testTag("btn_collapse_player_options")
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Close,
-                                                            contentDescription = "Recolher Opções",
-                                                            tint = Color.White.copy(alpha = 0.8f),
-                                                            modifier = Modifier.size(18.dp)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Portrait mode: full action buttons
-                                    ChromecastButton(
-                                        castUiState = castUiState,
-                                        onCastConnectedClick = { onCastToggle() }
+                                // Screen rotation button in top bar
+                                IconButton(
+                                    onClick = { toggleFullscreen() },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.5f))
+                                        .testTag("player_top_rotate_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.ScreenRotation,
+                                        contentDescription = "Rotacionar Tela",
+                                        tint = Color.White
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
 
-                                    // Aspect ratio toggle
-                                    IconButton(
-                                        onClick = {
-                                            resizeMode = when (resizeMode) {
-                                                AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                                AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                            }
-                                        },
-                                        modifier = Modifier.size(36.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // Collapsible options menu in both portrait and landscape
+                                if (!areExtraActionsExpanded) {
+                                    Surface(
+                                        color = Color.Black.copy(alpha = 0.65f),
+                                        shape = RoundedCornerShape(20.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                                        modifier = Modifier
+                                            .clickable { areExtraActionsExpanded = true }
+                                            .testTag("btn_expand_player_options")
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.AspectRatio,
-                                            contentDescription = "Formato de Tela",
-                                            tint = Color.White
-                                        )
-                                    }
-
-                                    // Web Player toggle
-                                    if (!video.embedUrl.isNullOrBlank() || video.streamUrl.isNotBlank()) {
-                                        IconButton(
-                                            onClick = { useWebviewPlayer = true },
-                                            modifier = Modifier.size(36.dp)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                         ) {
                                             Icon(
-                                                imageVector = Icons.Default.Language,
-                                                contentDescription = "Player Web",
-                                                tint = Color.White
+                                                imageVector = Icons.Default.Tune,
+                                                contentDescription = "Opções do Player",
+                                                tint = StadiumGreenPrimary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "Opções",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
                                             )
                                         }
                                     }
-
-                                    // Rotate button
-                                    IconButton(
-                                        onClick = { toggleFullscreen() },
-                                        modifier = Modifier.size(36.dp)
+                                } else {
+                                    AnimatedVisibility(
+                                        visible = areExtraActionsExpanded,
+                                        enter = fadeIn() + expandHorizontally(),
+                                        exit = fadeOut() + shrinkHorizontally()
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ScreenRotation,
-                                            contentDescription = "Rotacionar Tela",
-                                            tint = Color.White
-                                        )
+                                        Surface(
+                                            color = Color.Black.copy(alpha = 0.85f),
+                                            shape = RoundedCornerShape(20.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.5f)),
+                                            modifier = Modifier.padding(start = 4.dp)
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                // Transmitir (Chromecast)
+                                                ChromecastButton(
+                                                    castUiState = castUiState,
+                                                    onCastConnectedClick = { onCastToggle() }
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                WebVideoCasterButton(streamUrl = video.streamUrl.ifBlank { video.embedUrl ?: "" }, title = video.title)
+                                                Spacer(modifier = Modifier.width(6.dp))
+
+                                                // Formato de Tela (Aspect ratio)
+                                                IconButton(
+                                                    onClick = {
+                                                        resizeMode = when (resizeMode) {
+                                                            AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                                            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                                        }
+                                                    },
+                                                    modifier = Modifier.size(36.dp).testTag("btn_aspect_ratio")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.AspectRatio,
+                                                        contentDescription = "Formato de Tela",
+                                                        tint = Color.White
+                                                    )
+                                                }
+
+                                                // Usar Player Web
+                                                if (!video.embedUrl.isNullOrBlank() || video.streamUrl.isNotBlank()) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Button(
+                                                        onClick = { 
+                                                            areExtraActionsExpanded = false
+                                                            useWebviewPlayer = true 
+                                                        },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                        modifier = Modifier.height(34.dp).testTag("btn_switch_web_player")
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.Language,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(16.dp),
+                                                            tint = Color.White
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Player Web", color = Color.White, fontSize = 12.sp)
+                                                    }
+                                                }
+
+                                                // Recarregar Stream
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                IconButton(
+                                                    onClick = {
+                                                        errorMessage = null
+                                                        exoPlayer?.prepare()
+                                                        exoPlayer?.play()
+                                                    },
+                                                    modifier = Modifier.size(36.dp).testTag("btn_reload_stream")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Refresh,
+                                                        contentDescription = "Recarregar Transmissão",
+                                                        tint = Color.White
+                                                    )
+                                                }
+
+                                                // Botão Recolher Opções
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                IconButton(
+                                                    onClick = { areExtraActionsExpanded = false },
+                                                    modifier = Modifier.size(30.dp).testTag("btn_collapse_player_options")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Close,
+                                                        contentDescription = "Recolher Opções",
+                                                        tint = Color.White.copy(alpha = 0.8f),
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1233,6 +1301,8 @@ fun CastPlaybackHub(
                 }
 
                 ChromecastButton(castUiState = castUiState)
+                Spacer(modifier = Modifier.width(8.dp))
+                WebVideoCasterButton(streamUrl = video.streamUrl.ifBlank { video.embedUrl ?: "" }, title = video.title)
             }
 
             // Center Visualizer & Media Info

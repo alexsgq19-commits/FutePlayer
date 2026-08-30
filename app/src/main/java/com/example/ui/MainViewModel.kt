@@ -70,7 +70,12 @@ data class HomeUiState(
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Float = 0f,
     val updateDownloadError: String? = null,
-    val showInstallPromptDialog: Boolean = false
+    val showInstallPromptDialog: Boolean = false,
+    val webVideoCasterUrl: String = "https://github.com/instantbits/WebVideoCaster/releases/download/v5.7.0/WebVideoCaster-v5.7.0.apk",
+    val isDownloadingWvc: Boolean = false,
+    val wvcDownloadProgress: Float = 0f,
+    val wvcDownloadError: String? = null,
+    val showWvcInstallPromptDialog: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -90,6 +95,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val currentUser: StateFlow<User?> = _currentUser.asStateFlow()
 
     private val sharedPrefs = application.getSharedPreferences("futemais_prefs", Context.MODE_PRIVATE)
+    private val _isLiveNotificationsEnabled = MutableStateFlow(sharedPrefs.getBoolean("live_notifications_enabled", true))
+    val isLiveNotificationsEnabled: StateFlow<Boolean> = _isLiveNotificationsEnabled.asStateFlow()
+
+    fun toggleLiveNotifications() {
+        val newValue = !_isLiveNotificationsEnabled.value
+        sharedPrefs.edit().putBoolean("live_notifications_enabled", newValue).apply()
+        _isLiveNotificationsEnabled.value = newValue
+    }
 
     val allUsers = userRepository.getAllUsers()
         .catch { e ->
@@ -103,16 +116,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val favoritesFlow = repository.favoriteIds
 
     private var downloadedUpdateFile: java.io.File? = null
+    private var downloadedWvcFile: java.io.File? = null
 
     init {
         val savedUrl = sharedPrefs.getString("latest_apk_url", "") ?: ""
         val savedVersion = sharedPrefs.getString("latest_version_name", "1.0.0") ?: "1.0.0"
+        val savedWvcUrl = sharedPrefs.getString("wvc_apk_url", "") ?: ""
+        val defaultWvcUrl = "https://github.com/instantbits/WebVideoCaster/releases/download/v5.7.0/WebVideoCaster-v5.7.0.apk"
+        val finalWvcUrl = if (savedWvcUrl.isNotBlank()) savedWvcUrl else defaultWvcUrl
+
         _uiState.value = _uiState.value.copy(
             quickChannels = repository.getQuickChannels(),
             customCategories = repository.getCustomCategories(),
             latestApkUrl = savedUrl,
             latestVersionName = savedVersion,
-            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.0.0"
+            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.0.0",
+            webVideoCasterUrl = finalWvcUrl
         )
         
         repository.syncFromFirestore {
@@ -122,17 +141,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         
-        repository.syncUpdateFromFirestore { url, version ->
+        repository.syncUpdateFromFirestore { url, version, timestamp ->
             _uiState.value = _uiState.value.copy(
                 latestApkUrl = url,
                 latestVersionName = version,
                 hasStoredApk = url.isNotBlank()
             )
-            val lastNotifiedVersion = sharedPrefs.getString("last_notified_version", "")
-            if (version.isNotBlank() && version != lastNotifiedVersion && version != "1.0.0") {
+            val lastNotifiedTimestamp = sharedPrefs.getLong("last_notified_timestamp", 0L)
+            
+            if (url.isNotBlank() && timestamp > lastNotifiedTimestamp) {
                 notificationManager.showAppUpdateNotification(version)
-                sharedPrefs.edit().putString("last_notified_version", version).apply()
+                sharedPrefs.edit()
+                    .putLong("last_notified_timestamp", timestamp)
+                    .putString("last_notified_url", url)
+                    .putString("last_notified_version", version)
+                    .apply()
             }
+        }
+        
+        repository.syncWvcUrlFromFirestore { url ->
+            _uiState.value = _uiState.value.copy(webVideoCasterUrl = url)
         }
         
         loadMatches(isRefresh = false)
@@ -494,6 +522,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(customCategories = updated)
     }
 
+    fun updateChannelCategory(oldName: String, newName: String) {
+        val updated = repository.updateCustomCategory(oldName, newName)
+        _uiState.value = _uiState.value.copy(
+            customCategories = updated,
+            quickChannels = repository.getQuickChannels()
+        )
+    }
+
     fun resetDefaultChannel(id: String) {
         val updatedChannels = repository.resetDefaultChannel(id)
         _uiState.value = _uiState.value.copy(quickChannels = updatedChannels)
@@ -656,7 +692,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sharedPrefs.edit()
             .putString("latest_apk_url", cleanUrl)
             .putString("latest_version_name", versionName)
-            .putString("last_notified_version", versionName)
             .apply()
 
         _uiState.value = _uiState.value.copy(
@@ -666,152 +701,151 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         
         repository.publishUpdateToFirestore(cleanUrl, versionName)
-
-        notificationManager.showAppUpdateNotification(versionName)
     }
 
-    fun downloadAndUpdate(apkUrl: String) {
-        if (apkUrl.isBlank()) return
+    private fun startManagedDownload(
+        apkUrl: String,
+        fileName: String,
+        title: String,
+        onStart: suspend () -> Unit,
+        onProgress: suspend (Float) -> Unit,
+        onSuccess: suspend (java.io.File) -> Unit,
+        onError: suspend (String) -> Unit
+    ) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                _uiState.value = _uiState.value.copy(isDownloadingUpdate = true, updateDownloadProgress = 0f, updateDownloadError = null)
-                
+                onStart()
+                val context = getApplication<Application>()
                 var url = java.net.URL(apkUrl)
                 var connection = url.openConnection() as java.net.HttpURLConnection
                 connection.instanceFollowRedirects = true
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
                 connection.connect()
 
-                // Manual redirect handling for tricky URLs
-                var redirect = false
-                var status = connection.responseCode
-                if (status != java.net.HttpURLConnection.HTTP_OK) {
-                    if (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP
-                        || status == java.net.HttpURLConnection.HTTP_MOVED_PERM
-                        || status == java.net.HttpURLConnection.HTTP_SEE_OTHER
-                        || status == 307
-                        || status == 308) {
-                        redirect = true
-                    }
-                }
-
-                while (redirect) {
-                    val newUrl = connection.getHeaderField("Location")
-                    val cookies = connection.getHeaderField("Set-Cookie")
-                    connection.disconnect()
-                    
-                    url = java.net.URL(newUrl)
-                    connection = url.openConnection() as java.net.HttpURLConnection
-                    connection.instanceFollowRedirects = true
-                    if (cookies != null) {
-                        connection.setRequestProperty("Cookie", cookies)
-                    }
-                    connection.connect()
-                    status = connection.responseCode
-                    if (status != java.net.HttpURLConnection.HTTP_MOVED_TEMP
-                        && status != java.net.HttpURLConnection.HTTP_MOVED_PERM
-                        && status != java.net.HttpURLConnection.HTTP_SEE_OTHER
-                        && status != 307
-                        && status != 308) {
-                        redirect = false
-                    }
-                }
-
                 var contentType = connection.contentType
-                
+                var finalUrlStr = url.toString()
+
                 if (contentType != null && contentType.contains("text/html") && url.host.contains("drive.google.com")) {
-                    // Might be Google Drive virus scan warning for large files. Extract confirm token.
                     val html = connection.inputStream.bufferedReader().use { it.readText() }
                     val confirmRegex = Regex("confirm=([a-zA-Z0-9_-]+)")
                     val match = confirmRegex.find(html)
-                    
                     if (match != null) {
                         val confirmToken = match.groupValues[1]
-                        val cookies = connection.getHeaderField("Set-Cookie")
-                        connection.disconnect()
-                        
                         val fileIdRegex = Regex("id=([a-zA-Z0-9_-]+)")
                         val idMatch = fileIdRegex.find(url.toString())
                         val fileId = idMatch?.groupValues?.get(1) ?: ""
-                        
-                        val newUrlStr = "https://drive.google.com/uc?export=download&id=$fileId&confirm=$confirmToken"
-                        url = java.net.URL(newUrlStr)
-                        connection = url.openConnection() as java.net.HttpURLConnection
-                        connection.instanceFollowRedirects = true
-                        if (cookies != null) {
-                            connection.setRequestProperty("Cookie", cookies)
-                        }
-                        connection.connect()
-                        contentType = connection.contentType
+                        finalUrlStr = "https://drive.google.com/uc?export=download&id=$fileId&confirm=$confirmToken"
+                    } else {
+                        throw Exception("O link fornecido não é um arquivo APK válido (Google Drive HTML).")
                     }
+                } else if (contentType != null && contentType.contains("text/html")) {
+                    throw Exception("O link fornecido não é um arquivo APK válido (Página HTML retornada). Certifique-se de usar o link direto.")
+                } else {
+                    finalUrlStr = connection.url.toString()
                 }
-
-                if (contentType != null && contentType.contains("text/html")) {
-                    if (url.host.contains("github.com") || url.host.contains("github")) {
-                        throw Exception("Erro: O GitHub retornou uma página web. Verifique se o Repositório é PÚBLICO (Repositórios privados bloqueiam o download).")
-                    }
-                    // It's an HTML page, probably a Google Drive virus scan warning or invalid link
-                    throw Exception("O link fornecido não é um arquivo APK válido (Página HTML retornada). O arquivo pode estar bloqueado ou precisar de permissões.")
-                }
-
-                val length = connection.contentLength
-                val inputStream = connection.inputStream
-                val cacheDir = getApplication<Application>().cacheDir
-                val apkFile = java.io.File(cacheDir, "update.apk")
-                
-                // Delete existing to ensure clean write
-                if (apkFile.exists()) {
-                    apkFile.delete()
-                }
-                
-                val outputStream = java.io.FileOutputStream(apkFile)
-
-                val buffer = ByteArray(8192)
-                var downloaded: Long = 0
-                var count: Int
-
-                while (inputStream.read(buffer).also { count = it } != -1) {
-                    outputStream.write(buffer, 0, count)
-                    downloaded += count
-                    if (length > 0) {
-                        val progress = downloaded.toFloat() / length.toFloat()
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            _uiState.value = _uiState.value.copy(updateDownloadProgress = progress)
-                        }
-                    }
-                }
-
-                outputStream.flush()
-                outputStream.close()
-                inputStream.close()
                 connection.disconnect()
 
-                downloadedUpdateFile = apkFile
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(
-                        isDownloadingUpdate = false,
-                        showInstallPromptDialog = true
-                    )
+                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                val uri = android.net.Uri.parse(finalUrlStr)
+                
+                val request = android.app.DownloadManager.Request(uri).apply {
+                    setTitle(title)
+                    setDescription("Baixando arquivo...")
+                    setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                    setMimeType("application/vnd.android.package-archive")
+                }
+
+                val file = java.io.File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
+                if (file.exists()) file.delete()
+
+                val downloadId = downloadManager.enqueue(request)
+
+                var downloading = true
+                while (downloading) {
+                    kotlinx.coroutines.delay(1000)
+                    val query = android.app.DownloadManager.Query().setFilterById(downloadId)
+                    val cursor = downloadManager.query(query)
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val statusColumn = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_STATUS)
+                        val status = cursor.getInt(statusColumn)
+
+                        val bytesDownloadedColumn = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                        val bytesTotalColumn = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                        
+                        if (bytesDownloadedColumn != -1 && bytesTotalColumn != -1) {
+                            val bytesDownloaded = cursor.getLong(bytesDownloadedColumn)
+                            val bytesTotal = cursor.getLong(bytesTotalColumn)
+
+                            if (bytesTotal > 0) {
+                                val progress = bytesDownloaded.toFloat() / bytesTotal.toFloat()
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    onProgress(progress)
+                                }
+                            }
+                        }
+
+                        if (status == android.app.DownloadManager.STATUS_SUCCESSFUL) {
+                            downloading = false
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                onSuccess(file)
+                            }
+                        } else if (status == android.app.DownloadManager.STATUS_FAILED) {
+                            downloading = false
+                            throw Exception("Falha no download gerenciado pelo sistema.")
+                        }
+                    } else if (cursor == null) {
+                        downloading = false
+                    }
+                    cursor?.close()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    _uiState.value = _uiState.value.copy(
-                        isDownloadingUpdate = false,
-                        updateDownloadError = e.localizedMessage ?: "Erro ao baixar a atualização."
-                    )
+                    onError(e.localizedMessage ?: "Erro ao baixar arquivo.")
                 }
             }
         }
     }
 
+    fun downloadAndUpdate(apkUrl: String) {
+        if (apkUrl.isBlank()) return
+        startManagedDownload(
+            apkUrl = apkUrl,
+            fileName = "update.apk",
+            title = "Atualização do FutePlayer",
+            onStart = {
+                _uiState.value = _uiState.value.copy(isDownloadingUpdate = true, updateDownloadProgress = 0f, updateDownloadError = null)
+            },
+            onProgress = { progress ->
+                _uiState.value = _uiState.value.copy(updateDownloadProgress = progress)
+            },
+            onSuccess = { file ->
+                downloadedUpdateFile = file
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingUpdate = false,
+                    showInstallPromptDialog = true
+                )
+            },
+            onError = { error ->
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingUpdate = false,
+                    updateDownloadError = error
+                )
+            }
+        )
+    }
+
     fun prepareAndPromptInstall() {
         if (downloadedUpdateFile == null || !downloadedUpdateFile!!.exists()) {
-            downloadedUpdateFile = java.io.File(getApplication<Application>().cacheDir, "update.apk")
+            downloadedUpdateFile = java.io.File(getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "update.apk")
+            if (!downloadedUpdateFile!!.exists()) {
+                downloadedUpdateFile = java.io.File(getApplication<Application>().cacheDir, "update.apk")
+            }
         }
         if (downloadedUpdateFile != null && downloadedUpdateFile!!.exists()) {
             _uiState.value = _uiState.value.copy(showInstallPromptDialog = true)
         } else {
-            // If not downloaded yet, trigger download
             if (_uiState.value.latestApkUrl.isNotBlank()) {
                 downloadAndUpdate(_uiState.value.latestApkUrl)
             }
@@ -823,13 +857,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installDownloadedUpdate(context: Context) {
-        var file = downloadedUpdateFile ?: java.io.File(getApplication<Application>().cacheDir, "update.apk")
+        var file = downloadedUpdateFile ?: java.io.File(getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "update.apk")
         
-        // Fallback for older versions that stored in filesDir
         if (!file.exists()) {
-            val oldFile = java.io.File(getApplication<Application>().filesDir, "stored_app_update.apk")
-            if (oldFile.exists()) {
-                file = oldFile
+            val cacheFile = java.io.File(getApplication<Application>().cacheDir, "update.apk")
+            if (cacheFile.exists()) {
+                file = cacheFile
+            } else {
+                val oldFile = java.io.File(getApplication<Application>().filesDir, "stored_app_update.apk")
+                if (oldFile.exists()) {
+                    file = oldFile
+                }
+            }
+        }
+        
+        if (file.exists()) {
+            try {
+                val apkUri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.provider",
+                    file
+                )
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(apkUri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun publishWvcUrl(url: String) {
+        val cleanUrl = cleanGoogleDriveUrl(url)
+        sharedPrefs.edit().putString("wvc_apk_url", cleanUrl).apply()
+        _uiState.value = _uiState.value.copy(webVideoCasterUrl = cleanUrl)
+        repository.publishWvcUrlToFirestore(cleanUrl)
+    }
+
+    fun downloadWebVideoCaster(apkUrl: String) {
+        if (apkUrl.isBlank()) return
+        startManagedDownload(
+            apkUrl = apkUrl,
+            fileName = "webvideocaster.apk",
+            title = "Web Video Caster",
+            onStart = {
+                _uiState.value = _uiState.value.copy(isDownloadingWvc = true, wvcDownloadProgress = 0f, wvcDownloadError = null)
+            },
+            onProgress = { progress ->
+                _uiState.value = _uiState.value.copy(wvcDownloadProgress = progress)
+            },
+            onSuccess = { file ->
+                downloadedWvcFile = file
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingWvc = false,
+                    showWvcInstallPromptDialog = true
+                )
+            },
+            onError = { error ->
+                _uiState.value = _uiState.value.copy(
+                    isDownloadingWvc = false,
+                    wvcDownloadError = error
+                )
+            }
+        )
+    }
+
+    fun dismissWvcInstallPrompt() {
+        _uiState.value = _uiState.value.copy(showWvcInstallPromptDialog = false)
+    }
+
+    fun installDownloadedWvc(context: Context) {
+        var file = downloadedWvcFile ?: java.io.File(getApplication<Application>().getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "webvideocaster.apk")
+        
+        if (!file.exists()) {
+            val cacheFile = java.io.File(getApplication<Application>().cacheDir, "webvideocaster.apk")
+            if (cacheFile.exists()) {
+                file = cacheFile
             }
         }
         

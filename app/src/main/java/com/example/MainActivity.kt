@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         try {
             java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js").mkdirs()
@@ -72,6 +73,7 @@ class MainActivity : AppCompatActivity() {
 
                     val currentUser by viewModel.currentUser.collectAsState()
                     val allUsers by viewModel.allUsers.collectAsState()
+                    val isLiveNotificationsEnabled by viewModel.isLiveNotificationsEnabled.collectAsState()
 
                     if (showSplash) {
                         SplashScreen(
@@ -130,6 +132,9 @@ class MainActivity : AppCompatActivity() {
                                     onDeleteCategory = { category ->
                                         viewModel.deleteChannelCategory(category)
                                     },
+                                    onEditCategory = { oldName, newName ->
+                                        viewModel.updateChannelCategory(oldName, newName)
+                                    },
                                     onPublishUpdate = { url, version ->
                                         viewModel.publishNewUpdate(url, version)
                                     },
@@ -144,6 +149,18 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onDismissInstallPrompt = {
                                         viewModel.dismissInstallPrompt()
+                                    },
+                                    onPublishWvcUrl = { url ->
+                                        viewModel.publishWvcUrl(url)
+                                    },
+                                    onDownloadWvc = { url ->
+                                        viewModel.downloadWebVideoCaster(url)
+                                    },
+                                    onInstallWvc = { ctx ->
+                                        viewModel.installDownloadedWvc(ctx)
+                                    },
+                                    onDismissWvcInstallPrompt = {
+                                        viewModel.dismissWvcInstallPrompt()
                                     }
                                 )
                             }
@@ -190,6 +207,8 @@ class MainActivity : AppCompatActivity() {
                             AccountDialog(
                                 user = currentUser!!,
                                 allUsers = allUsers,
+                                isLiveNotificationsEnabled = isLiveNotificationsEnabled,
+                                onToggleLiveNotifications = { viewModel.toggleLiveNotifications() },
                                 onDismiss = { showAccountDialog = false },
                                 onOpenUserManagement = {
                                     viewModel.navigateTo(UiScreen.UserManagement)

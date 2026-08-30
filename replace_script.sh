@@ -1,0 +1,241 @@
+#!/bin/bash
+cat << 'INNER' > app/src/main/java/com/example/ui/MainViewModel.kt.patch
+--- app/src/main/java/com/example/ui/MainViewModel.kt
++++ app/src/main/java/com/example/ui/MainViewModel.kt
+@@ -703,96 +703,90 @@
+         }
+     }
+ 
+-    fun downloadAndUpdate(apkUrl: String) {
+-        if (apkUrl.isBlank()) return
+-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+-            try {
+-                _uiState.value = _uiState.value.copy(isDownloadingUpdate = true, updateDownloadProgress = 0f, updateDownloadError = null)
+-                
+-                var url = java.net.URL(apkUrl)
+-                var connection = url.openConnection() as java.net.HttpURLConnection
+-                connection.instanceFollowRedirects = true
+-                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+-                connection.connect()
+-
+-                var contentType = connection.contentType
+-                
+-                if (contentType != null && contentType.contains("text/html") && url.host.contains("drive.google.com")) {
+-                    val html = connection.inputStream.bufferedReader().use { it.readText() }
+-                    val confirmRegex = Regex("confirm=([a-zA-Z0-9_-]+)")
+-                    val match = confirmRegex.find(html)
+-                    
+-                    if (match != null) {
+-                        val confirmToken = match.groupValues[1]
+-                        val cookies = connection.getHeaderField("Set-Cookie")
+-                        connection.disconnect()
+-                        
+-                        val fileIdRegex = Regex("id=([a-zA-Z0-9_-]+)")
+-                        val idMatch = fileIdRegex.find(url.toString())
+-                        val fileId = idMatch?.groupValues?.get(1) ?: ""
+-                        
+-                        val newUrlStr = "https://drive.google.com/uc?export=download&id=$fileId&confirm=$confirmToken"
+-                        url = java.net.URL(newUrlStr)
+-                        connection = url.openConnection() as java.net.HttpURLConnection
+-                        connection.instanceFollowRedirects = true
+-                        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
+-                        if (cookies != null) {
+-                            connection.setRequestProperty("Cookie", cookies)
+-                        }
+-                        connection.connect()
+-                        contentType = connection.contentType
+-                    }
+-                }
+-
+-                if (contentType != null && contentType.contains("text/html")) {
+-                    throw Exception("O link fornecido não é um arquivo APK válido (Página HTML retornada). Certifique-se de usar o link direto.")
+-                }
+-
+-                val responseCode = connection.responseCode
+-                if (responseCode != java.net.HttpURLConnection.HTTP_OK) {
+-                    throw Exception("Erro HTTP: $responseCode")
+-                }
+-
+-                val length = connection.contentLength
+-                val inputStream = connection.inputStream
+-                val cacheDir = getApplication<Application>().cacheDir
+-                val apkFile = java.io.File(cacheDir, "update.apk")
+-                
+-                if (apkFile.exists()) {
+-                    apkFile.delete()
+-                }
+-
+-                val outputStream = java.io.FileOutputStream(apkFile)
+-                val buffer = ByteArray(8192)
+-                var downloaded: Long = 0
+-                var count: Int
+-
+-                while (inputStream.read(buffer).also { count = it } != -1) {
+-                    outputStream.write(buffer, 0, count)
+-                    downloaded += count
+-                    if (length > 0) {
+-                        val progress = downloaded.toFloat() / length.toFloat()
+-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+-                            _uiState.value = _uiState.value.copy(updateDownloadProgress = progress)
+-                        }
+-                    }
+-                }
+-
+-                outputStream.flush()
+-                outputStream.close()
+-                inputStream.close()
+-                connection.disconnect()
+-
+-                downloadedUpdateFile = apkFile
+-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+-                    _uiState.value = _uiState.value.copy(
+-                        isDownloadingUpdate = false,
+-                        showInstallPromptDialog = true
+-                    )
+-                }
+-            } catch (e: Exception) {
+-                e.printStackTrace()
+-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+-                    _uiState.value = _uiState.value.copy(
+-                        isDownloadingUpdate = false,
+-                        updateDownloadError = e.localizedMessage ?: "Erro ao baixar atualização."
+-                    )
+-                }
+-            }
+-        }
++    private fun startManagedDownload(
++        apkUrl: String,
++        fileName: String,
++        title: String,
++        onStart: suspend () -> Unit,
++        onProgress: suspend (Float) -> Unit,
++        onSuccess: suspend (java.io.File) -> Unit,
++        onError: suspend (String) -> Unit
++    ) {
++        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
++            try {
++                onStart()
++                val context = getApplication<Application>()
++                var url = java.net.URL(apkUrl)
++                var connection = url.openConnection() as java.net.HttpURLConnection
++                connection.instanceFollowRedirects = true
++                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36")
++                connection.connect()
++
++                var contentType = connection.contentType
++                var finalUrlStr = url.toString()
++
++                if (contentType != null && contentType.contains("text/html") && url.host.contains("drive.google.com")) {
++                    val html = connection.inputStream.bufferedReader().use { it.readText() }
++                    val confirmRegex = Regex("confirm=([a-zA-Z0-9_-]+)")
++                    val match = confirmRegex.find(html)
++                    if (match != null) {
++                        val confirmToken = match.groupValues[1]
++                        val fileIdRegex = Regex("id=([a-zA-Z0-9_-]+)")
++                        val idMatch = fileIdRegex.find(url.toString())
++                        val fileId = idMatch?.groupValues?.get(1) ?: ""
++                        finalUrlStr = "https://drive.google.com/uc?export=download&id=$fileId&confirm=$confirmToken"
++                    } else {
++                        throw Exception("O link fornecido não é um arquivo APK válido (Google Drive HTML).")
++                    }
++                } else if (contentType != null && contentType.contains("text/html")) {
++                    throw Exception("O link fornecido não é um arquivo APK válido (Página HTML retornada). Certifique-se de usar o link direto.")
++                } else {
++                    finalUrlStr = connection.url.toString()
++                }
++                connection.disconnect()
++
++                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
++                val uri = android.net.Uri.parse(finalUrlStr)
++                
++                val request = android.app.DownloadManager.Request(uri).apply {
++                    setTitle(title)
++                    setDescription("Baixando arquivo...")
++                    setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
++                    setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
++                    setMimeType("application/vnd.android.package-archive")
++                }
++
++                val file = java.io.File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), fileName)
++                if (file.exists()) file.delete()
++
++                val downloadId = downloadManager.enqueue(request)
++
++                var downloading = true
++                while (downloading) {
++                    kotlinx.coroutines.delay(1000)
++                    val query = android.app.DownloadManager.Query().setFilterById(downloadId)
++                    val cursor = downloadManager.query(query)
++                    if (cursor != null && cursor.moveToFirst()) {
++                        val statusColumn = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_STATUS)
++                        val status = cursor.getInt(statusColumn)
++
++                        val bytesDownloadedColumn = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
++                        val bytesTotalColumn = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
++                        
++                        if (bytesDownloadedColumn != -1 && bytesTotalColumn != -1) {
++                            val bytesDownloaded = cursor.getLong(bytesDownloadedColumn)
++                            val bytesTotal = cursor.getLong(bytesTotalColumn)
++
++                            if (bytesTotal > 0) {
++                                val progress = bytesDownloaded.toFloat() / bytesTotal.toFloat()
++                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
++                                    onProgress(progress)
++                                }
++                            }
++                        }
++
++                        if (status == android.app.DownloadManager.STATUS_SUCCESSFUL) {
++                            downloading = false
++                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
++                                onSuccess(file)
++                            }
++                        } else if (status == android.app.DownloadManager.STATUS_FAILED) {
++                            downloading = false
++                            throw Exception("Falha no download gerenciado pelo sistema.")
++                        }
++                    } else if (cursor == null) {
++                        downloading = false
++                    }
++                    cursor?.close()
++                }
++            } catch (e: Exception) {
++                e.printStackTrace()
++                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
++                    onError(e.localizedMessage ?: "Erro ao baixar arquivo.")
++                }
++            }
++        }
++    }
++
++    fun downloadAndUpdate(apkUrl: String) {
++        if (apkUrl.isBlank()) return
++        startManagedDownload(
++            apkUrl = apkUrl,
++            fileName = "update.apk",
++            title = "Atualização do FutePlayer",
++            onStart = {
++                _uiState.value = _uiState.value.copy(isDownloadingUpdate = true, updateDownloadProgress = 0f, updateDownloadError = null)
++            },
++            onProgress = { progress ->
++                _uiState.value = _uiState.value.copy(updateDownloadProgress = progress)
++            },
++            onSuccess = { file ->
++                downloadedUpdateFile = file
++                _uiState.value = _uiState.value.copy(
++                    isDownloadingUpdate = false,
++                    showInstallPromptDialog = true
++                )
++            },
++            onError = { error ->
++                _uiState.value = _uiState.value.copy(
++                    isDownloadingUpdate = false,
++                    updateDownloadError = error
++                )
++            }
++        )
+     }
+ 
+     fun prepareAndPromptInstall() {
+INNER
+patch app/src/main/java/com/example/ui/MainViewModel.kt < app/src/main/java/com/example/ui/MainViewModel.kt.patch

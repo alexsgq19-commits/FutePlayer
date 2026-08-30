@@ -1,5 +1,13 @@
 package com.example.ui.components
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import android.view.ContextThemeWrapper
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -35,6 +43,75 @@ import com.example.cast.CastUiState
 import com.example.ui.theme.StadiumCyanSecondary
 import com.example.ui.theme.StadiumGreenPrimary
 import com.google.android.gms.cast.framework.CastButtonFactory
+
+fun launchWebVideoCaster(context: android.content.Context, url: String, title: String) {
+    try {
+        val targetUrl = if (url.isNotBlank()) url.trim() else ""
+        if (targetUrl.isBlank()) return
+        val isDirectStream = targetUrl.contains(".m3u8", ignoreCase = true) ||
+                             targetUrl.contains(".mp4", ignoreCase = true) ||
+                             targetUrl.contains(".ts", ignoreCase = true) ||
+                             targetUrl.contains(".mkv", ignoreCase = true)
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setPackage("com.instantbits.cast.webvideo")
+            if (isDirectStream) {
+                setDataAndType(Uri.parse(targetUrl), "video/*")
+            } else {
+                data = Uri.parse(targetUrl)
+            }
+            putExtra("title", title)
+            putExtra("secure_uri", targetUrl)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        try {
+            val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.instantbits.cast.webvideo")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(marketIntent)
+        } catch (_: Exception) {
+            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.instantbits.cast.webvideo")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(webIntent)
+        }
+    }
+}
+
+@Composable
+fun WebVideoCasterButton(
+    streamUrl: String,
+    title: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    Button(
+        onClick = {
+            launchWebVideoCaster(context, streamUrl, title)
+        },
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color(0xFF1E88E5)
+        ),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+        modifier = modifier.height(34.dp).testTag("btn_web_video_caster")
+    ) {
+        Icon(
+            imageVector = Icons.Default.Cast,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = "Web Video Caster",
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
 
 @Composable
 fun ChromecastButton(

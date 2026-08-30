@@ -24,24 +24,22 @@ data class User(
      * Considera online se a flag isOnline for verdadeira E se a última atividade (heartbeat)
      * tiver ocorrido nos últimos 2 minutos (120.000 ms).
      */
-    fun isCurrentlyOnline(thresholdMs: Long = 120_000L): Boolean {
+    fun isCurrentlyOnline(now: Long = System.currentTimeMillis(), thresholdMs: Long = 60_000L): Boolean {
         if (!isOnline) return false
         if (lastSeen <= 0L) return false
-        val now = System.currentTimeMillis()
         return (now - lastSeen) <= thresholdMs
     }
 
     /**
      * Retorna texto amigável formatado sobre o status online ou última vez visto.
      */
-    fun getFormattedLastSeen(): String {
-        if (isCurrentlyOnline()) {
+    fun getFormattedLastSeen(now: Long = System.currentTimeMillis()): String {
+        if (isCurrentlyOnline(now)) {
             return "Online agora"
         }
         if (lastSeen <= 0L) {
             return "Nunca acessou"
         }
-        val now = System.currentTimeMillis()
         val diffMs = now - lastSeen
         if (diffMs < 0L) return "Recentemente"
 

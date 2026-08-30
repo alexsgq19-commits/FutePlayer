@@ -165,7 +165,7 @@ class AppNotificationManager(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_CHANNELS)
+        val notification = NotificationCompat.Builder(context, CHANNEL_MATCHES)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("🚀 Nova Atualização Disponível (v$versionName)")
             .setContentText("Uma nova versão do app está pronta. Toque para atualizar na aba Suporte.")

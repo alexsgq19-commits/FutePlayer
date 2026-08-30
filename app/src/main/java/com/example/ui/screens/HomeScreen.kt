@@ -100,6 +100,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -161,10 +162,15 @@ fun HomeScreen(
     onResetDefaultChannel: (id: String) -> Unit = {},
     onCreateCategory: (String) -> Unit = {},
     onDeleteCategory: (String) -> Unit = {},
+    onEditCategory: (oldName: String, newName: String) -> Unit = { _, _ -> },
     onPublishUpdate: (String, String) -> Unit = { _, _ -> },
     onDownloadUpdate: (String) -> Unit = {},
     onInstallUpdate: (Context) -> Unit = {},
     onDismissInstallPrompt: () -> Unit = {},
+    onPublishWvcUrl: (String) -> Unit = {},
+    onDownloadWvc: (String) -> Unit = {},
+    onInstallWvc: (Context) -> Unit = {},
+    onDismissWvcInstallPrompt: () -> Unit = {},
     onUploadAndStoreApk: (android.net.Uri, String) -> Unit = { _, _ -> },
     onPrepareAndPromptInstall: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -545,7 +551,8 @@ fun HomeScreen(
                             onDeleteQuickChannel = onDeleteQuickChannel,
                             onResetDefaultChannel = onResetDefaultChannel,
                             onCreateCategory = onCreateCategory,
-                            onDeleteCategory = onDeleteCategory
+                            onDeleteCategory = onDeleteCategory,
+                            onEditCategory = onEditCategory
                         )
                     }
 
@@ -558,6 +565,10 @@ fun HomeScreen(
                             onPrepareAndPromptInstall = onPrepareAndPromptInstall,
                             onInstallUpdate = onInstallUpdate,
                             onDismissInstallPrompt = onDismissInstallPrompt,
+                            onPublishWvcUrl = onPublishWvcUrl,
+                            onDownloadWvc = onDownloadWvc,
+                            onInstallWvc = onInstallWvc,
+                            onDismissWvcInstallPrompt = onDismissWvcInstallPrompt,
                             networkStatus = uiState.networkStatus
                         )
                     }
@@ -582,6 +593,31 @@ fun HomeScreen(
                         },
                         dismissButton = {
                             OutlinedButton(onClick = onDismissInstallPrompt) {
+                                Text("Mais Tarde")
+                            }
+                        }
+                    )
+                }
+
+                if (uiState.showWvcInstallPromptDialog) {
+                    val context = LocalContext.current
+                    AlertDialog(
+                        onDismissRequest = onDismissWvcInstallPrompt,
+                        title = { Text("Instalar Web Video Caster?") },
+                        text = { Text("O download do Web Video Caster foi concluído com sucesso. Deseja instalar o aplicativo agora?") },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    onInstallWvc(context)
+                                    onDismissWvcInstallPrompt()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5), contentColor = Color.White)
+                            ) {
+                                Text("Instalar Agora", fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        dismissButton = {
+                            OutlinedButton(onClick = onDismissWvcInstallPrompt) {
                                 Text("Mais Tarde")
                             }
                         }
@@ -718,7 +754,8 @@ fun ChannelsGridContent(
     onDeleteQuickChannel: (id: String) -> Unit = {},
     onResetDefaultChannel: (id: String) -> Unit = {},
     onCreateCategory: (category: String) -> Unit = {},
-    onDeleteCategory: (category: String) -> Unit = {}
+    onDeleteCategory: (category: String) -> Unit = {},
+    onEditCategory: (oldName: String, newName: String) -> Unit = { _, _ -> }
 ) {
     var selectedCategory by remember { mutableStateOf("Todos") }
 
@@ -777,6 +814,9 @@ fun ChannelsGridContent(
     var showCreateCategoryDialog by remember { mutableStateOf(false) }
     var newCategoryInput by remember { mutableStateOf("") }
     var categoryFeedbackError by remember { mutableStateOf<String?>(null) }
+    var editingCategory by remember { mutableStateOf<String?>(null) }
+    var editCategoryNameInput by remember { mutableStateOf("") }
+    var editCategoryError by remember { mutableStateOf<String?>(null) }
 
     // Dialog state for adding new quick channel
     var showAddDialog by remember { mutableStateOf(false) }
@@ -2469,23 +2509,48 @@ fun ChannelsGridContent(
                                             }
                                         }
 
-                                        IconButton(
-                                            onClick = {
-                                                onDeleteCategory(cat)
-                                                if (selectedCategory == cat) {
-                                                    selectedCategory = "Todos"
-                                                }
-                                            },
-                                            modifier = Modifier
-                                                .size(32.dp)
-                                                .testTag("btn_delete_category_$cat")
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = "Excluir categoria",
-                                                tint = MaterialTheme.colorScheme.error,
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                            if (isAdmin) {
+                                                IconButton(
+                                                    onClick = {
+                                                        editingCategory = cat
+                                                        editCategoryNameInput = cat
+                                                        editCategoryError = null
+                                                    },
+                                                    modifier = Modifier
+                                                        .size(32.dp)
+                                                        .testTag("btn_edit_category_$cat")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Edit,
+                                                        contentDescription = "Editar categoria",
+                                                        tint = StadiumGreenPrimary,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            IconButton(
+                                                onClick = {
+                                                    onDeleteCategory(cat)
+                                                    if (selectedCategory == cat) {
+                                                        selectedCategory = "Todos"
+                                                    }
+                                                },
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .testTag("btn_delete_category_$cat")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Excluir categoria",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -2514,7 +2579,71 @@ fun ChannelsGridContent(
             }
         }
     }
+
+    // Dialog: Editar Categoria (Admin Only)
+    if (editingCategory != null) {
+        val catToEdit = editingCategory!!
+        AlertDialog(
+            onDismissRequest = { editingCategory = null },
+            title = { Text("Editar Categoria") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = editCategoryNameInput,
+                        onValueChange = {
+                            editCategoryNameInput = it
+                            editCategoryError = null
+                        },
+                        label = { Text("Novo Nome da Categoria") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (editCategoryError != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = editCategoryError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = editCategoryNameInput.trim()
+                        if (trimmed.isBlank()) {
+                            editCategoryError = "O nome não pode estar vazio."
+                            return@Button
+                        }
+                        if (categories.any { it.equals(trimmed, ignoreCase = true) } && !trimmed.equals(catToEdit, ignoreCase = true)) {
+                            editCategoryError = "Esta categoria já existe."
+                            return@Button
+                        }
+                        onEditCategory(catToEdit, trimmed)
+                        if (selectedCategory == catToEdit) {
+                            selectedCategory = trimmed
+                        }
+                        editingCategory = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary)
+                ) {
+                    Text("Salvar", color = Color.Black)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingCategory = null }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+
 }
+
+
+
 
 @Composable
 fun SupportContent(
@@ -2525,6 +2654,10 @@ fun SupportContent(
     onPrepareAndPromptInstall: () -> Unit,
     onInstallUpdate: (Context) -> Unit,
     onDismissInstallPrompt: () -> Unit,
+    onPublishWvcUrl: (String) -> Unit,
+    onDownloadWvc: (String) -> Unit,
+    onInstallWvc: (Context) -> Unit,
+    onDismissWvcInstallPrompt: () -> Unit,
     networkStatus: NetworkStatus
 ) {
     val context = LocalContext.current
@@ -2534,8 +2667,8 @@ fun SupportContent(
     val whatsappClean = "5575992490975"
 
     val isAdmin = currentUser?.role == "ADMIN" || currentUser?.cpf == "06462555505"
-    var versionNameInput by remember { mutableStateOf(uiState.latestVersionName) }
-    var apkUrlInput by remember { mutableStateOf(uiState.latestApkUrl) }
+    var versionNameInput by remember(uiState.latestVersionName) { mutableStateOf(uiState.latestVersionName) }
+    var apkUrlInput by remember(uiState.latestApkUrl) { mutableStateOf(uiState.latestApkUrl) }
 
     LazyColumn(
         modifier = Modifier
@@ -2793,6 +2926,163 @@ fun SupportContent(
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = if (uiState.latestApkUrl.isNotBlank()) "Baixar e Instalar v${uiState.latestVersionName}" else "Nenhuma Atualização Disponível",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        // Baixar Web Video Caster Card
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF1E88E5).copy(alpha = 0.15f),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Cast,
+                                    contentDescription = "Web Video Caster",
+                                    tint = Color(0xFF1E88E5)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = "Web Vídeo Caster",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Aplicativo recomendado para transmissão (Cast)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF1E88E5),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (isAdmin) {
+                        var wvcUrlInput by remember(uiState.webVideoCasterUrl) { mutableStateOf(uiState.webVideoCasterUrl) }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.background.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "Painel do Admin: Link do APK do Web Video Caster",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = StadiumCyanSecondary
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = wvcUrlInput,
+                                    onValueChange = { wvcUrlInput = it },
+                                    label = { Text("Link de Download do WVC APK") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Button(
+                                    onClick = {
+                                        if (wvcUrlInput.isNotBlank()) {
+                                            onPublishWvcUrl(wvcUrlInput)
+                                            Toast.makeText(context, "Link do Web Video Caster atualizado!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Informe a URL do APK do WVC", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5), contentColor = Color.White),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.Publish, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Salvar Link do Web Video Caster", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    if (uiState.wvcDownloadError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = uiState.wvcDownloadError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    if (uiState.isDownloadingWvc) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Baixando Web Video Caster...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "${(uiState.wvcDownloadProgress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1E88E5)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LinearProgressIndicator(
+                                progress = { uiState.wvcDownloadProgress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = Color(0xFF1E88E5),
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (uiState.webVideoCasterUrl.isNotBlank()) {
+                                    onDownloadWvc(uiState.webVideoCasterUrl)
+                                } else {
+                                    Toast.makeText(context, "Nenhum link do Web Video Caster disponível.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF1E88E5),
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "Baixar WVC"
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Baixar e Instalar Web Video Caster",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp
                             )

@@ -83,18 +83,19 @@ class FutemaisRepository(context: Context) {
             }
     }
 
-    fun syncUpdateFromFirestore(onUpdateFound: (url: String, version: String) -> Unit) {
+    fun syncUpdateFromFirestore(onUpdateFound: (url: String, version: String, timestamp: Long) -> Unit) {
         firestore?.collection("app_data")?.document("update_info")?.addSnapshotListener { doc, error ->
             if (error != null) return@addSnapshotListener
             if (doc != null && doc.exists()) {
                 val url = doc.getString("latest_apk_url") ?: ""
                 val version = doc.getString("latest_version_name") ?: ""
+                val timestamp = doc.getLong("timestamp") ?: 0L
                 if (url.isNotBlank() && version.isNotBlank()) {
                     val editor = prefs.edit()
                     editor.putString("latest_apk_url", url)
                     editor.putString("latest_version_name", version)
                     editor.apply()
-                    onUpdateFound(url, version)
+                    onUpdateFound(url, version, timestamp)
                 }
             }
         }
@@ -103,9 +104,30 @@ class FutemaisRepository(context: Context) {
     fun publishUpdateToFirestore(url: String, version: String) {
         val data = hashMapOf(
             "latest_apk_url" to url,
-            "latest_version_name" to version
+            "latest_version_name" to version,
+            "timestamp" to System.currentTimeMillis()
         )
         firestore?.collection("app_data")?.document("update_info")?.set(data)
+    }
+
+    fun publishWvcUrlToFirestore(url: String) {
+        val data = hashMapOf(
+            "wvc_apk_url" to url
+        )
+        firestore?.collection("app_data")?.document("wvc_info")?.set(data)
+    }
+
+    fun syncWvcUrlFromFirestore(onUrlFound: (url: String) -> Unit) {
+        firestore?.collection("app_data")?.document("wvc_info")?.addSnapshotListener { doc, error ->
+            if (error != null) return@addSnapshotListener
+            if (doc != null && doc.exists()) {
+                val url = doc.getString("wvc_apk_url") ?: ""
+                if (url.isNotBlank()) {
+                    prefs.edit().putString("wvc_apk_url", url).apply()
+                    onUrlFound(url)
+                }
+            }
+        }
     }
 
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -176,6 +198,41 @@ class FutemaisRepository(context: Context) {
         val current = getCustomCategories().toMutableList()
         current.removeAll { it.equals(category.trim(), ignoreCase = true) }
         saveCustomCategories(current)
+        return getCustomCategories()
+    }
+
+    fun updateCustomCategory(oldName: String, newName: String): List<String> {
+        val cleanOld = oldName.trim()
+        val cleanNew = newName.trim()
+        if (cleanOld.isBlank() || cleanNew.isBlank()) return getCustomCategories()
+        val current = getCustomCategories().toMutableList()
+        val idx = current.indexOfFirst { it.equals(cleanOld, ignoreCase = true) }
+        if (idx >= 0) {
+            current[idx] = cleanNew
+            saveCustomCategories(current)
+        } else {
+            val isDefault = defaultCategories.any { it.equals(cleanNew, ignoreCase = true) }
+            val alreadyExists = current.any { it.equals(cleanNew, ignoreCase = true) }
+            if (!isDefault && !alreadyExists) {
+                current.add(cleanNew)
+                saveCustomCategories(current)
+            }
+        }
+
+        val channels = loadCustomChannels().toMutableList()
+        var changed = false
+        for (i in channels.indices) {
+            val ch = channels[i]
+            if (ch.category.equals(cleanOld, ignoreCase = true)) {
+                channels[i] = ch.copy(category = cleanNew)
+                changed = true
+            }
+        }
+        if (changed) {
+            saveCustomChannels(channels)
+            syncToFirestore()
+        }
+
         return getCustomCategories()
     }
 
@@ -308,8 +365,9 @@ class FutemaisRepository(context: Context) {
     suspend fun fetchMatches(url: String = "https://futemais.link/app2/"): Result<List<MatchItem>> =
         withContext(Dispatchers.IO) {
             try {
+                val targetUrl = url
                 val request = Request.Builder()
-                    .url(url)
+                    .url(targetUrl)
                     .header(
                         "User-Agent",
                         "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
@@ -443,7 +501,7 @@ class FutemaisRepository(context: Context) {
                         "User-Agent",
                         "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
                     )
-                    .header("Referer", "https://futemais.link/app2/")
+                    .header("Referer", "https://futemais.link/")
                     .build()
 
                 val response = client.newCall(request).execute()
@@ -528,7 +586,7 @@ class FutemaisRepository(context: Context) {
                     "User-Agent",
                     "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
                 )
-                .header("Referer", "https://temporariofutemais.com/")
+                .header("Referer", "https://futemais.link/")
                 .build()
 
             val response = client.newCall(request).execute()
@@ -580,7 +638,7 @@ class FutemaisRepository(context: Context) {
             }
 
             val headers = mapOf(
-                "Referer" to "https://temporariofutemais.com/",
+                "Referer" to "https://futemais.link/",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
             )
 

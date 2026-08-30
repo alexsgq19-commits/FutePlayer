@@ -20,6 +20,8 @@ import com.example.ui.theme.StadiumGreenPrimary
 fun AccountDialog(
     user: User,
     allUsers: List<User> = emptyList(),
+    isLiveNotificationsEnabled: Boolean,
+    onToggleLiveNotifications: () -> Unit,
     onDismiss: () -> Unit,
     onOpenUserManagement: () -> Unit,
     onLogout: () -> Unit
@@ -51,6 +53,25 @@ fun AccountDialog(
                     color = StadiumGreenPrimary,
                     fontWeight = FontWeight.SemiBold
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Notificações de Jogos ao Vivo",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = isLiveNotificationsEnabled,
+                        onCheckedChange = { onToggleLiveNotifications() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = StadiumGreenPrimary,
+                            checkedTrackColor = StadiumGreenPrimary.copy(alpha = 0.5f)
+                        )
+                    )
+                }
 
                 if (isAdmin) {
                     Spacer(modifier = Modifier.height(4.dp))
