@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -21,11 +22,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.models.User
 import com.example.ui.theme.StadiumGreenPrimary
+import com.example.util.SearchUtils
 import kotlinx.coroutines.delay
 
 enum class UserPresenceFilter(val label: String) {
@@ -68,9 +71,7 @@ fun UserManagementScreen(
     val filteredUsers = remember(users, searchQuery, selectedFilter, currentTime) {
         users.filter { user ->
             val matchesSearch = searchQuery.isBlank() ||
-                    user.name.contains(searchQuery, ignoreCase = true) ||
-                    user.cpf.contains(searchQuery, ignoreCase = true) ||
-                    user.role.contains(searchQuery, ignoreCase = true)
+                    SearchUtils.matchesCombined(searchQuery, user.name, user.cpf, user.phone, user.role)
 
             val isOnline = user.isCurrentlyOnline(currentTime)
             val matchesFilter = when (selectedFilter) {
@@ -432,6 +433,13 @@ fun UserManagementScreen(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        if (user.phone.isNotBlank()) {
+                                            Text(
+                                                text = "Cel: ${user.phone}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
 
                                     // Selos no topo direito
@@ -684,6 +692,7 @@ fun AddEditUserDialog(
 ) {
     var name by remember { mutableStateOf(userToEdit?.name ?: "") }
     var cpf by remember { mutableStateOf(userToEdit?.cpf ?: "") }
+    var phone by remember { mutableStateOf(userToEdit?.phone ?: "") }
     var password by remember { mutableStateOf(userToEdit?.password ?: "") }
     var role by remember { mutableStateOf(userToEdit?.role ?: "USER") }
     var isActive by remember { mutableStateOf(userToEdit?.isActive ?: true) }
@@ -707,7 +716,20 @@ fun AddEditUserDialog(
                 OutlinedTextField(
                     value = cpf,
                     onValueChange = { cpf = it },
-                    label = { Text("CPF") },
+                    label = { Text("CPF (Opcional)") },
+                    placeholder = { Text("000.000.000-00") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = phone,
+                    onValueChange = { phone = it },
+                    label = { Text("Número de Celular / WhatsApp") },
+                    placeholder = { Text("Ex: (75) 99249-0975") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Phone, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -753,13 +775,14 @@ fun AddEditUserDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (name.isBlank() || cpf.isBlank() || password.isBlank()) {
-                        error = "Preencha todos os campos."
+                    if (name.isBlank() || password.isBlank() || (cpf.isBlank() && phone.isBlank())) {
+                        error = "Preencha Nome, Senha e pelo menos Celular ou CPF."
                         return@Button
                     }
                     val user = (userToEdit ?: User()).copy(
                         name = name.trim(),
                         cpf = cpf.trim(),
+                        phone = phone.trim(),
                         password = password.trim(),
                         role = role,
                         isActive = isActive

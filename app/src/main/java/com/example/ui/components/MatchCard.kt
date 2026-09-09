@@ -60,8 +60,8 @@ import com.example.ui.theme.StadiumGreenPrimary
 fun MatchCard(
     match: MatchItem,
     onClick: () -> Unit,
-    onFavoriteClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onFavoriteClick: () -> Unit = {}
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val liveAlpha by infiniteTransition.animateFloat(
@@ -176,22 +176,6 @@ fun MatchCard(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
-                    }
-
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    IconButton(
-                        onClick = onFavoriteClick,
-                        modifier = Modifier
-                            .size(28.dp)
-                            .testTag("favorite_btn_${match.id}")
-                    ) {
-                        Icon(
-                            imageVector = if (match.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                            contentDescription = "Favoritar partida",
-                            tint = if (match.isFavorite) StadiumAccentRed else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
                     }
                 }
             }

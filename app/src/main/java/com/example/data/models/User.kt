@@ -9,15 +9,18 @@ data class User(
     @get:PropertyName("uid") @set:PropertyName("uid") var uid: String = "",
     @get:PropertyName("name") @set:PropertyName("name") var name: String = "",
     @get:PropertyName("cpf") @set:PropertyName("cpf") var cpf: String = "",
+    @get:PropertyName("phone") @set:PropertyName("phone") var phone: String = "",
     @get:PropertyName("password") @set:PropertyName("password") var password: String = "",
     @get:PropertyName("role") @set:PropertyName("role") var role: String = "USER",
     @get:PropertyName("isActive") @set:PropertyName("isActive") var isActive: Boolean = true,
     @get:PropertyName("createdAt") @set:PropertyName("createdAt") var createdAt: Long = System.currentTimeMillis(),
     @get:PropertyName("isOnline") @set:PropertyName("isOnline") var isOnline: Boolean = false,
-    @get:PropertyName("lastSeen") @set:PropertyName("lastSeen") var lastSeen: Long = 0L
+    @get:PropertyName("lastSeen") @set:PropertyName("lastSeen") var lastSeen: Long = 0L,
+    @get:PropertyName("deviceId") @set:PropertyName("deviceId") var deviceId: String = "",
+    @get:PropertyName("sessionToken") @set:PropertyName("sessionToken") var sessionToken: String = ""
 ) {
     // Construtor sem argumentos para o Firebase Firestore
-    constructor() : this("", "", "", "", "USER", true, System.currentTimeMillis(), false, 0L)
+    constructor() : this("", "", "", "", "", "USER", true, System.currentTimeMillis(), false, 0L, "", "")
 
     /**
      * Retorna se o usuário está de fato online neste momento.

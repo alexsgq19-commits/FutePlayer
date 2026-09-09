@@ -1,11 +1,14 @@
 package com.example.notifications
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -34,6 +37,12 @@ class AppNotificationManager(private val context: Context) {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .build()
+            val defaultSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
             val matchesChannel = NotificationChannel(
                 CHANNEL_MATCHES,
                 "Jogos e Partidas Ao Vivo",
@@ -41,16 +50,26 @@ class AppNotificationManager(private val context: Context) {
             ).apply {
                 description = "Notificações de novos jogos de futebol, partidas ao vivo e transmissões iniciadas"
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 250, 500)
+                enableLights(true)
+                lightColor = 0xFF00E676.toInt()
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(defaultSoundUri, audioAttributes)
                 setShowBadge(true)
             }
 
             val channelsChannel = NotificationChannel(
                 CHANNEL_CHANNELS,
                 "Novos Canais e Transmissões",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Avisos sobre novos canais rápidos e emissoras adicionadas"
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 400, 200, 400)
+                enableLights(true)
+                lightColor = 0xFF00E676.toInt()
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(defaultSoundUri, audioAttributes)
                 setShowBadge(true)
             }
 
@@ -99,8 +118,11 @@ class AppNotificationManager(private val context: Context) {
                 NotificationCompat.BigTextStyle()
                     .bigText("A partida $title ($league) está programada para $time. Toque para acompanhar as transmissões!")
             )
-            .setColor(0xFF00E676.toInt()) // Stadium Green
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setColor(0xFF00E676.toInt())
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
@@ -139,7 +161,10 @@ class AppNotificationManager(private val context: Context) {
                     .bigText("O canal '$channelTitle' foi adicionado aos Canais Rápidos. Toque para abrir e assistir.")
             )
             .setColor(0xFF00E676.toInt())
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
@@ -174,13 +199,55 @@ class AppNotificationManager(private val context: Context) {
                     .bigText("Uma nova versão ($versionName) do aplicativo foi lançada. Acesse a aba de Suporte para baixar e atualizar agora mesmo!")
             )
             .setColor(0xFF00E676.toInt())
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
 
         try {
             NotificationManagerCompat.from(context).notify(9999, notification)
+        } catch (_: SecurityException) {}
+    }
+
+    fun showAdminChannelAlertNotification(
+        title: String,
+        message: String,
+        offlineCount: Int
+    ) {
+        if (!hasNotificationPermission()) return
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_TARGET_TYPE, TARGET_CHANNEL)
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            "admin_channels_alert".hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_CHANNELS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(message)
+            )
+            .setColor(if (offlineCount > 0) 0xFFFF1744.toInt() else 0xFF00E676.toInt())
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(context).notify("admin_channel_diagnostic".hashCode(), notification)
         } catch (_: SecurityException) {}
     }
 }

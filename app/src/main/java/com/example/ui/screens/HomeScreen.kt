@@ -22,6 +22,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,12 +50,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import com.example.R
 import com.example.data.models.User
+import com.example.util.SearchUtils
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Category
@@ -72,10 +77,15 @@ import androidx.compose.material.icons.filled.SupervisorAccount
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Publish
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -96,6 +106,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -105,11 +118,13 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -123,8 +138,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.cast.CastUiState
 import com.example.data.models.ChannelOption
+import com.example.data.models.EpisodeItem
 import com.example.data.models.MatchItem
+import com.example.data.models.MediaItem
 import com.example.data.models.PlayableVideo
+import com.example.data.models.SeasonItem
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -156,8 +174,14 @@ fun HomeScreen(
     onSelectChannel: (MatchItem, ChannelOption) -> Unit,
     onPlayDirect: (PlayableVideo) -> Unit,
     onToggleFavorite: (String) -> Unit,
-    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String) -> Unit = { _, _, _, _, _ -> },
-    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String) -> Unit = { _, _, _, _, _, _ -> },
+    onPlayMovie: (MediaItem) -> Unit = {},
+    onPlayEpisode: (MediaItem, SeasonItem, EpisodeItem) -> Unit = { _, _, _ -> },
+    onAddOrUpdateMedia: (MediaItem) -> Unit = {},
+    onDeleteMedia: (String) -> Unit = {},
+    onToggleMediaFavorite: (String) -> Unit = {},
+    onToggleChannelWorkingStatus: (String) -> Unit = {},
+    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _ -> },
+    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
     onDeleteQuickChannel: (id: String) -> Unit = {},
     onResetDefaultChannel: (id: String) -> Unit = {},
     onCreateCategory: (String) -> Unit = {},
@@ -173,6 +197,11 @@ fun HomeScreen(
     onDismissWvcInstallPrompt: () -> Unit = {},
     onUploadAndStoreApk: (android.net.Uri, String) -> Unit = { _, _ -> },
     onPrepareAndPromptInstall: () -> Unit = {},
+    onUpdateSupportWhatsapp: (String) -> Unit = {},
+    onToggleRegistrationEnabled: (Boolean) -> Unit = {},
+    onTestAllChannels: () -> Unit = {},
+    onTestSingleChannel: (String) -> Unit = {},
+    onDismissAdminChannelAlert: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -329,43 +358,90 @@ fun HomeScreen(
             }
 
             // ==========================================
-            // SEARCH & FILTER BAR
+            // SEARCH & FILTER BAR (COMPACT) - Shown for Matches & Channels
             // ==========================================
-            OutlinedTextField(
-                value = uiState.searchQuery,
-                onValueChange = onSearchChange,
-                placeholder = { Text("Buscar time, jogo ou campeonato...") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+            if (uiState.currentTab != NavigationTab.SUPPORT) {
+                var isSearchFocused by remember { mutableStateOf(false) }
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp)
+                        .height(38.dp)
+                        .testTag("search_input"),
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isSearchFocused) StadiumGreenPrimary
+                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
                     )
-                },
-                trailingIcon = {
-                    if (uiState.searchQuery.isNotBlank()) {
-                        IconButton(onClick = { onSearchChange("") }) {
-                            Icon(
-                                imageVector = Icons.Default.Clear,
-                                contentDescription = "Limpar busca",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            tint = if (isSearchFocused) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (uiState.searchQuery.isEmpty()) {
+                                Text(
+                                    text = when (uiState.currentTab) {
+                                        NavigationTab.MATCHES -> "Buscar jogo ou time..."
+                                        NavigationTab.CHANNELS -> "Buscar canal..."
+                                        NavigationTab.MOVIES_SERIES -> "Buscar filme ou série..."
+                                        NavigationTab.SUPPORT -> ""
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            BasicTextField(
+                                value = uiState.searchQuery,
+                                onValueChange = onSearchChange,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onFocusChanged { isSearchFocused = it.isFocused },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 13.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(StadiumGreenPrimary)
                             )
                         }
+
+                        if (uiState.searchQuery.isNotBlank()) {
+                            IconButton(
+                                onClick = { onSearchChange("") },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Limpar busca",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
                     }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = StadiumGreenPrimary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .testTag("search_input")
-            )
+                }
+            }
 
             // ==========================================
             // ADMIN ONLINE USERS BANNER
@@ -479,6 +555,19 @@ fun HomeScreen(
                 )
 
                 Tab(
+                    selected = uiState.currentTab == NavigationTab.MOVIES_SERIES,
+                    onClick = { onTabSelect(NavigationTab.MOVIES_SERIES) },
+                    text = {
+                        Text(
+                            text = "Filmes & Séries (${uiState.mediaCatalog.size})",
+                            fontWeight = if (uiState.currentTab == NavigationTab.MOVIES_SERIES) FontWeight.Bold else FontWeight.Normal,
+                            color = if (uiState.currentTab == NavigationTab.MOVIES_SERIES) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    modifier = Modifier.testTag("tab_movies_series")
+                )
+
+                Tab(
                     selected = uiState.currentTab == NavigationTab.SUPPORT,
                     onClick = { onTabSelect(NavigationTab.SUPPORT) },
                     text = {
@@ -543,9 +632,18 @@ fun HomeScreen(
                     NavigationTab.CHANNELS -> {
                         ChannelsGridContent(
                             channels = uiState.quickChannels,
+                            searchQuery = uiState.searchQuery,
                             customCategories = uiState.customCategories,
                             currentUser = currentUser,
+                            isTestingChannels = uiState.isTestingChannels,
+                            channelTestProgressText = uiState.channelTestProgressText,
+                            adminChannelAlert = uiState.adminChannelAlert,
                             onPlayChannel = onPlayDirect,
+                            onToggleFavorite = onToggleFavorite,
+                            onToggleChannelWorkingStatus = onToggleChannelWorkingStatus,
+                            onTestAllChannels = onTestAllChannels,
+                            onTestSingleChannel = onTestSingleChannel,
+                            onDismissAdminChannelAlert = onDismissAdminChannelAlert,
                             onAddQuickChannel = onAddQuickChannel,
                             onEditQuickChannel = onEditQuickChannel,
                             onDeleteQuickChannel = onDeleteQuickChannel,
@@ -553,6 +651,19 @@ fun HomeScreen(
                             onCreateCategory = onCreateCategory,
                             onDeleteCategory = onDeleteCategory,
                             onEditCategory = onEditCategory
+                        )
+                    }
+
+                    NavigationTab.MOVIES_SERIES -> {
+                        MediaScreenContent(
+                            mediaList = uiState.mediaCatalog,
+                            searchQuery = uiState.searchQuery,
+                            isAdmin = isAdmin,
+                            onPlayMovie = onPlayMovie,
+                            onPlayEpisode = onPlayEpisode,
+                            onAddOrUpdateMedia = onAddOrUpdateMedia,
+                            onDeleteMedia = onDeleteMedia,
+                            onToggleFavorite = onToggleMediaFavorite
                         )
                     }
 
@@ -569,6 +680,8 @@ fun HomeScreen(
                             onDownloadWvc = onDownloadWvc,
                             onInstallWvc = onInstallWvc,
                             onDismissWvcInstallPrompt = onDismissWvcInstallPrompt,
+                            onUpdateSupportWhatsapp = onUpdateSupportWhatsapp,
+                            onToggleRegistrationEnabled = onToggleRegistrationEnabled,
                             networkStatus = uiState.networkStatus
                         )
                     }
@@ -734,8 +847,7 @@ fun MatchesListContent(
                 items(matches, key = { it.id }) { match ->
                     MatchCard(
                         match = match,
-                        onClick = { onSelectMatch(match) },
-                        onFavoriteClick = { onToggleFavorite(match.id) }
+                        onClick = { onSelectMatch(match) }
                     )
                 }
             }
@@ -746,11 +858,20 @@ fun MatchesListContent(
 @Composable
 fun ChannelsGridContent(
     channels: List<PlayableVideo>,
+    searchQuery: String = "",
     customCategories: List<String> = emptyList(),
     currentUser: User? = null,
+    isTestingChannels: Boolean = false,
+    channelTestProgressText: String? = null,
+    adminChannelAlert: String? = null,
     onPlayChannel: (PlayableVideo) -> Unit,
-    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String) -> Unit = { _, _, _, _, _ -> },
-    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String) -> Unit = { _, _, _, _, _, _ -> },
+    onToggleFavorite: (String) -> Unit = {},
+    onToggleChannelWorkingStatus: (String) -> Unit = {},
+    onTestAllChannels: () -> Unit = {},
+    onTestSingleChannel: (String) -> Unit = {},
+    onDismissAdminChannelAlert: () -> Unit = {},
+    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _ -> },
+    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
     onDeleteQuickChannel: (id: String) -> Unit = {},
     onResetDefaultChannel: (id: String) -> Unit = {},
     onCreateCategory: (category: String) -> Unit = {},
@@ -759,8 +880,9 @@ fun ChannelsGridContent(
 ) {
     var selectedCategory by remember { mutableStateOf("Todos") }
 
-    val defaultCategories = listOf(
-        "Todos",
+    val isAdmin = currentUser?.role == "ADMIN" || currentUser?.cpf == "06462555505"
+
+    val initialDefaults = listOf(
         "Esportes",
         "Católicos (CXTV)",
         "Desenhos & Kids",
@@ -769,18 +891,45 @@ fun ChannelsGridContent(
     )
 
     // Build the full categories list dynamically
-    val categories = remember(customCategories, channels) {
-        val extraChannelCategories = channels.mapNotNull { it.category?.trim() }
-            .filter { it.isNotBlank() && it !in defaultCategories && it !in customCategories && it != "Personalizados" && it != "Outros" }
+    val categories = remember(customCategories, channels, isAdmin) {
+        val channelCats = channels.mapNotNull { it.category?.trim() }
+            .filter { it.isNotBlank() && it != "Personalizados" && it != "Outros" && it != "Todos" && it != "⭐ Favoritos" && !it.contains("Fora do Ar", ignoreCase = true) }
             .distinct()
 
         val list = mutableListOf<String>()
-        list.addAll(defaultCategories)
-        list.addAll(customCategories.filter { it !in list })
-        list.addAll(extraChannelCategories.filter { it !in list })
+        list.add("Todos")
+        list.add("⭐ Favoritos")
+        if (isAdmin) {
+            list.add("🔴 Fora do Ar")
+        }
+
+        for (dCat in initialDefaults) {
+            if (channelCats.any { it.equals(dCat, ignoreCase = true) } || customCategories.any { it.equals(dCat, ignoreCase = true) }) {
+                list.add(dCat)
+            }
+        }
+
+        for (cat in customCategories) {
+            if (list.none { it.equals(cat, ignoreCase = true) } && cat != "Personalizados" && cat != "Outros" && !cat.contains("Fora do Ar", ignoreCase = true)) {
+                list.add(cat)
+            }
+        }
+
+        for (cat in channelCats) {
+            if (list.none { it.equals(cat, ignoreCase = true) } && cat != "Personalizados" && cat != "Outros" && !cat.contains("Fora do Ar", ignoreCase = true)) {
+                list.add(cat)
+            }
+        }
+
         list.add("Personalizados")
         list.add("Outros")
         list
+    }
+
+    LaunchedEffect(isAdmin) {
+        if (!isAdmin && selectedCategory == "🔴 Fora do Ar") {
+            selectedCategory = "Todos"
+        }
     }
 
     val categoryOptions = remember(customCategories, channels) {
@@ -792,7 +941,7 @@ fun ChannelsGridContent(
             "Abertos & Regionais" to "📺 Abertos & Regionais"
         )
         val customOptions = customCategories
-            .filter { cat -> defaultOptions.none { it.first.equals(cat, ignoreCase = true) } }
+            .filter { cat -> defaultOptions.none { it.first.equals(cat, ignoreCase = true) } && !cat.contains("Fora do Ar", ignoreCase = true) }
             .map { it to "🏷️ $it" }
 
         val extraChannelCats = channels.mapNotNull { it.category?.trim() }
@@ -800,15 +949,14 @@ fun ChannelsGridContent(
                 cat.isNotBlank() && 
                 defaultOptions.none { it.first.equals(cat, ignoreCase = true) } &&
                 customOptions.none { it.first.equals(cat, ignoreCase = true) } &&
-                cat != "Outros" && cat != "Personalizados"
+                cat != "Outros" && cat != "Personalizados" &&
+                !cat.contains("Fora do Ar", ignoreCase = true)
             }
             .distinct()
             .map { it to "🏷️ $it" }
 
         defaultOptions + customOptions + extraChannelCats + listOf("Outros" to "🌐 Outros")
     }
-
-    val isAdmin = currentUser?.role == "ADMIN" || currentUser?.cpf == "06462555505"
 
     // Dialog state for creating and managing custom categories
     var showCreateCategoryDialog by remember { mutableStateOf(false) }
@@ -826,6 +974,7 @@ fun ChannelsGridContent(
     var channelCategoryInput by remember { mutableStateOf("Esportes") }
     var customCategoryInput by remember { mutableStateOf("") }
     var isWebPlayerOption by remember { mutableStateOf(false) }
+    var channelIsWorkingInput by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     // Dialog state for editing quick channel
@@ -837,18 +986,21 @@ fun ChannelsGridContent(
     var editCategoryInput by remember { mutableStateOf("Esportes") }
     var editCustomCategoryInput by remember { mutableStateOf("") }
     var editIsWebPlayer by remember { mutableStateOf(false) }
+    var editIsWorking by remember { mutableStateOf(true) }
     var editErrorMessage by remember { mutableStateOf<String?>(null) }
 
     // Dialog state for delete confirmation
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var channelToDelete by remember { mutableStateOf<PlayableVideo?>(null) }
 
-    val filteredChannels = remember(channels, selectedCategory, customCategories) {
-        when (selectedCategory) {
+    val filteredChannels = remember(channels, selectedCategory, searchQuery, customCategories, isAdmin) {
+        val categoryFiltered = when (selectedCategory) {
             "Todos" -> channels
-            "Personalizados" -> channels.filter { it.id.startsWith("custom_") }
+            "⭐ Favoritos" -> channels.filter { it.isFavorite }
+            "🔴 Fora do Ar" -> if (isAdmin) channels.filter { !it.isWorking } else channels
+            "Personalizados" -> channels.filter { it.id.startsWith("custom_") || it.subtitle.contains("Admin", ignoreCase = true) || it.category.equals("Personalizados", ignoreCase = true) }
             "Esportes" -> channels.filter {
-                it.category == "Esportes" ||
+                it.category.equals("Esportes", ignoreCase = true) ||
                 it.category?.contains("esporte", ignoreCase = true) == true ||
                 it.id.contains("fifa") || 
                 it.id.contains("sportv") || 
@@ -858,7 +1010,7 @@ fun ChannelsGridContent(
                 it.id.contains("globo")
             }
             "Católicos (CXTV)" -> channels.filter {
-                it.category == "Católicos (CXTV)" ||
+                it.category.equals("Católicos (CXTV)", ignoreCase = true) ||
                 it.category?.contains("católic", ignoreCase = true) == true ||
                 it.id.contains("cxtv") || 
                 it.title.contains("Aparecida", ignoreCase = true) ||
@@ -872,7 +1024,7 @@ fun ChannelsGridContent(
                 it.subtitle.contains("Fé", ignoreCase = true)
             }
             "Desenhos & Kids" -> channels.filter {
-                it.category == "Desenhos & Kids" ||
+                it.category.equals("Desenhos & Kids", ignoreCase = true) ||
                 it.category?.contains("kids", ignoreCase = true) == true ||
                 it.category?.contains("desenho", ignoreCase = true) == true ||
                 it.id.contains("cartoon") || 
@@ -883,7 +1035,7 @@ fun ChannelsGridContent(
                 it.title.contains("Infantil", ignoreCase = true)
             }
             "Filmes & Séries" -> channels.filter {
-                it.category == "Filmes & Séries" ||
+                it.category.equals("Filmes & Séries", ignoreCase = true) ||
                 it.category?.contains("filme", ignoreCase = true) == true ||
                 it.category?.contains("cinema", ignoreCase = true) == true ||
                 it.category?.contains("série", ignoreCase = true) == true ||
@@ -894,7 +1046,7 @@ fun ChannelsGridContent(
                 it.title.contains("Filme", ignoreCase = true)
             }
             "Abertos & Regionais" -> channels.filter {
-                it.category == "Abertos & Regionais" ||
+                it.category.equals("Abertos & Regionais", ignoreCase = true) ||
                 it.category?.contains("aberto", ignoreCase = true) == true ||
                 it.category?.contains("regional", ignoreCase = true) == true ||
                 it.id.contains("brasil") ||
@@ -907,13 +1059,68 @@ fun ChannelsGridContent(
             }
             "Outros" -> channels.filter {
                 val cat = it.category
-                cat != null && cat !in listOf("Esportes", "Católicos (CXTV)", "Desenhos & Kids", "Filmes & Séries", "Abertos & Regionais") && cat !in customCategories
+                cat.isNullOrBlank() || cat.equals("Outros", ignoreCase = true) || (
+                    cat !in listOf("Esportes", "Católicos (CXTV)", "Desenhos & Kids", "Filmes & Séries", "Abertos & Regionais") &&
+                    customCategories.none { cc -> cc.equals(cat, ignoreCase = true) }
+                )
             }
             else -> channels.filter {
                 it.category.equals(selectedCategory, ignoreCase = true) ||
                 it.category?.contains(selectedCategory, ignoreCase = true) == true
             }
         }
+
+        if (searchQuery.isBlank()) {
+            categoryFiltered
+        } else {
+            val inCategoryMatches = categoryFiltered.filter { ch ->
+                SearchUtils.matchesCombined(searchQuery, ch.title, ch.subtitle, ch.category, ch.id)
+            }
+            if (inCategoryMatches.isEmpty() && selectedCategory != "Todos") {
+                channels.filter { ch ->
+                    SearchUtils.matchesCombined(searchQuery, ch.title, ch.subtitle, ch.category, ch.id)
+                }
+            } else {
+                inCategoryMatches
+            }
+        }
+    }
+
+    val groupedChannels = remember(filteredChannels, categories, customCategories) {
+        val groups = filteredChannels.groupBy { ch ->
+            val cat = ch.category?.trim()
+            if (!cat.isNullOrBlank()) {
+                cat
+            } else {
+                val id = ch.id.lowercase()
+                val title = ch.title.lowercase()
+                val sub = ch.subtitle.lowercase()
+                when {
+                    id.contains("cxtv") || title.contains("aparecida") || title.contains("rede vida") || title.contains("canção nova") || title.contains("evangelizar") || title.contains("século 21") || title.contains("pai eterno") || title.contains("nazaré") || sub.contains("missa") || sub.contains("fé") || sub.contains("oração") -> "Católicos (CXTV)"
+                    id.contains("fifa") || id.contains("sportv") || id.contains("premiere") || id.contains("espn") || id.contains("caze") || id.contains("globo") -> "Esportes"
+                    id.contains("cartoon") || id.contains("kids") || id.contains("desenho") || title.contains("cartoon") || title.contains("infantil") || sub.contains("infantil") -> "Desenhos & Kids"
+                    id.contains("cinema") || id.contains("filme") || id.contains("movie") || id.contains("sony") || title.contains("cinema") || title.contains("filme") -> "Filmes & Séries"
+                    id.contains("brasil") || id.contains("megatv") || id.contains("sbt") || id.contains("band") || id.contains("cultura") || id.contains("redetv") || id.contains("feira") -> "Abertos & Regionais"
+                    id.startsWith("custom_") -> "Personalizados"
+                    else -> "Outros"
+                }
+            }
+        }
+        val defaultCategoryOrder = listOf(
+            "Esportes",
+            "Católicos (CXTV)",
+            "Filmes & Séries",
+            "Desenhos & Kids",
+            "Abertos & Regionais"
+        )
+        val orderedCategories = (defaultCategoryOrder + customCategories + listOf("Personalizados", "Outros")).distinct()
+
+        groups.entries.sortedWith(
+            compareBy<Map.Entry<String, List<PlayableVideo>>> { entry ->
+                val idx = orderedCategories.indexOfFirst { it.equals(entry.key, ignoreCase = true) }
+                if (idx >= 0) idx else 999
+            }.thenBy { it.key }
+        ).map { it.key to it.value }
     }
 
     LazyColumn(
@@ -985,6 +1192,7 @@ fun ChannelsGridContent(
                                 channelCategoryInput = defaultCat
                                 customCategoryInput = ""
                                 isWebPlayerOption = false
+                                channelIsWorkingInput = true
                                 errorMessage = null
                                 showAddDialog = true
                             },
@@ -1011,130 +1219,248 @@ fun ChannelsGridContent(
                     }
                 }
             }
-        }
 
-        // Seção em destaque de Adicionar Canal Rápido para ADMIN
-        if (isAdmin) {
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("admin_add_channel_card"),
-                    colors = CardDefaults.cardColors(
-                        containerColor = StadiumGreenPrimary.copy(alpha = 0.12f)
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f))
-                ) {
-                    Column(
+            if (isAdmin) {
+                val totalCount = channels.size
+                val workingCount = channels.count { it.isWorking }
+                val offlineCount = totalCount - workingCount
+
+                // Banner de Alerta para o Administrador
+                if (adminChannelAlert != null) {
+                    val isWarning = adminChannelAlert.contains("⚠️") || adminChannelAlert.contains("Fora do Ar", ignoreCase = true) || adminChannelAlert.contains("Falha", ignoreCase = true)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        color = if (isWarning) Color(0xFFFF1744).copy(alpha = 0.16f) else Color(0xFF00E676).copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, if (isWarning) Color(0xFFFF1744).copy(alpha = 0.45f) else Color(0xFF00E676).copy(alpha = 0.45f)),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp)
+                            .testTag("admin_channel_alert_banner")
                     ) {
                         Row(
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isWarning) Icons.Default.WarningAmber else Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = if (isWarning) Color(0xFFFF5252) else Color(0xFF00E676),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = if (isWarning) "Alerta de Transmissão (Admin)" else "Status dos Canais",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isWarning) Color(0xFFFF5252) else Color(0xFF00E676)
+                                    )
+                                    Text(
+                                        text = adminChannelAlert,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 11.5.sp
+                                    )
+                                    if (isWarning && offlineCount > 0) {
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = "👉 Toque para ver canais fora do ar",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = StadiumGreenPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.clickable { selectedCategory = "🔴 Fora do Ar" }
+                                        )
+                                    }
+                                }
+                            }
+                            IconButton(
+                                onClick = onDismissAdminChannelAlert,
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Fechar alerta",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Progresso animado durante o teste automático de canais
+                if (isTestingChannels) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = StadiumCyanSecondary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = StadiumCyanSecondary
+                            )
+                            Text(
+                                text = channelTestProgressText ?: "Testando canais automaticamente...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.AdminPanelSettings,
                                 contentDescription = null,
                                 tint = StadiumGreenPrimary,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Sessão Administrador: Canais & Categorias",
-                                style = MaterialTheme.typography.titleSmall,
+                                text = "Status dos Canais:",
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = StadiumGreenPrimary
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 11.sp
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = "Gerencie transmissões ao vivo e crie categorias personalizadas para organizar todos os canais.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Button(
-                                onClick = {
-                                    val defaultCat = when (selectedCategory) {
-                                        "Todos", "Personalizados", "Outros" -> "Esportes"
-                                        else -> selectedCategory
-                                    }
-                                    channelTitleInput = ""
-                                    channelSubtitleInput = ""
-                                    channelUrlInput = ""
-                                    channelCategoryInput = defaultCat
-                                    customCategoryInput = ""
-                                    isWebPlayerOption = false
-                                    errorMessage = null
-                                    showAddDialog = true
-                                },
+                            // Botão Testar Canais
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = StadiumCyanSecondary.copy(alpha = 0.15f),
+                                border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f)),
                                 modifier = Modifier
-                                    .weight(1.3f)
-                                    .height(44.dp)
-                                    .testTag("btn_quick_add_channel_banner"),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = StadiumGreenPrimary,
-                                    contentColor = Color.Black
-                                ),
-                                shape = RoundedCornerShape(10.dp)
+                                    .clickable(enabled = !isTestingChannels) {
+                                        onTestAllChannels()
+                                    }
+                                    .testTag("btn_test_all_channels")
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Link,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Adicionar Canal",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.NetworkCheck,
+                                        contentDescription = "Testar funcionamento dos canais",
+                                        tint = StadiumCyanSecondary,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        text = if (isTestingChannels) "Testando..." else "Testar",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = StadiumCyanSecondary,
+                                        fontSize = 10.sp
+                                    )
+                                }
                             }
 
-                            OutlinedButton(
-                                onClick = {
-                                    newCategoryInput = ""
-                                    categoryFeedbackError = null
-                                    showCreateCategoryDialog = true
-                                },
-                                modifier = Modifier
-                                    .weight(1.1f)
-                                    .height(44.dp)
-                                    .testTag("btn_quick_create_category_banner"),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = StadiumGreenPrimary
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.6f)),
-                                shape = RoundedCornerShape(10.dp)
+                            // Filtro Online
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFF00E676).copy(alpha = 0.15f),
+                                modifier = Modifier.clickable {
+                                    selectedCategory = "Todos"
+                                }
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Category,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(17.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "+ Categoria",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF00E676))
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "$workingCount",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF00E676),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+
+                            // Filtro Fora do Ar
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (offlineCount > 0) Color(0xFFFF1744).copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface,
+                                modifier = Modifier.clickable {
+                                    selectedCategory = if (selectedCategory == "🔴 Fora do Ar") "Todos" else "🔴 Fora do Ar"
+                                }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(if (offlineCount > 0) Color(0xFFFF1744) else Color.Gray)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "$offlineCount Off",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (offlineCount > 0) Color(0xFFFF5252) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 10.sp
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
+
 
         // Category Filter Chips
         item {
@@ -1216,14 +1542,18 @@ fun ChannelsGridContent(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Category,
+                            imageVector = if (searchQuery.isNotBlank()) Icons.Default.Search else Icons.Default.Category,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(44.dp)
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Nenhum canal na categoria \"$selectedCategory\"",
+                            text = when {
+                                searchQuery.isNotBlank() -> "Nenhum canal encontrado para \"$searchQuery\""
+                                selectedCategory == "⭐ Favoritos" -> "Nenhum canal favoritado ainda"
+                                else -> "Nenhum canal na categoria \"$selectedCategory\""
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -1231,7 +1561,11 @@ fun ChannelsGridContent(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Não há canais cadastrados com esta categoria no momento.",
+                            text = when {
+                                searchQuery.isNotBlank() -> "Tente buscar por outro termo ou selecione a aba \"Todos\"."
+                                selectedCategory == "⭐ Favoritos" -> "Toque no ícone de coração ♡ em qualquer canal para salvá-lo nos seus favoritos."
+                                else -> "Não há canais cadastrados com esta categoria no momento."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -1269,7 +1603,76 @@ fun ChannelsGridContent(
             }
         }
 
-        items(filteredChannels, key = { it.id }) { channel ->
+        groupedChannels.forEach { (groupName, channelList) ->
+            item(key = "header_$groupName") {
+                val (icon, bgColors) = when {
+                    groupName.contains("esporte", ignoreCase = true) -> "⚽" to listOf(Color(0xFF00E676), Color(0xFF00B0FF))
+                    groupName.contains("católic", ignoreCase = true) -> "⛪" to listOf(Color(0xFFFFD54F), Color(0xFFFF9800))
+                    groupName.contains("filme", ignoreCase = true) || groupName.contains("série", ignoreCase = true) || groupName.contains("cinema", ignoreCase = true) -> "🎬" to listOf(Color(0xFFBA68C8), Color(0xFF673AB7))
+                    groupName.contains("desenho", ignoreCase = true) || groupName.contains("kid", ignoreCase = true) -> "🎨" to listOf(Color(0xFFFF8A65), Color(0xFFFF5252))
+                    groupName.contains("aberto", ignoreCase = true) || groupName.contains("regional", ignoreCase = true) -> "📺" to listOf(Color(0xFF4FC3F7), Color(0xFF0288D1))
+                    groupName.contains("personalizado", ignoreCase = true) -> "⚡" to listOf(StadiumGreenPrimary, StadiumCyanSecondary)
+                    groupName.contains("favorito", ignoreCase = true) -> "⭐" to listOf(Color(0xFFFFD700), Color(0xFFFF8C00))
+                    groupName.contains("fora do ar", ignoreCase = true) -> "🔴" to listOf(Color(0xFFFF5252), Color(0xFFD50000))
+                    else -> "🏷️" to listOf(Color(0xFF26A69A), Color(0xFF00897B))
+                }
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp, bottom = 4.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(Brush.linearGradient(bgColors)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(text = icon, fontSize = 13.sp)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = groupName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = "${channelList.size} ${if (channelList.size == 1) "canal" else "canais"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.5.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            items(channelList, key = { it.id }) { channel ->
             val isCustom = channel.id.startsWith("custom_")
             val cat = channel.category ?: ""
             val isCatholic = cat == "Católicos (CXTV)" || cat.contains("católic", ignoreCase = true) ||
@@ -1343,69 +1746,183 @@ fun ChannelsGridContent(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.weight(1f)
                         ) {
+                            // Container do ícone com bolinha indicadora de status no canto para Admin
                             Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        Brush.linearGradient(
-                                            if (isCustom) listOf(StadiumGreenPrimary, Color(0xFF00E676))
-                                            else if (isCatholic) listOf(Color(0xFFFFD54F), Color(0xFFFF9800))
-                                            else if (isCinema) listOf(Color(0xFFBA68C8), Color(0xFF673AB7))
-                                            else if (isKids) listOf(Color(0xFFFF8A65), Color(0xFFFF5252))
-                                            else if (isRegional) listOf(Color(0xFF4FC3F7), Color(0xFF0288D1))
-                                            else listOf(StadiumGreenPrimary, StadiumCyanSecondary)
-                                        )
-                                    ),
+                                modifier = Modifier.size(52.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    imageVector = if (isCustom) Icons.Default.Link else if (isCatholic) Icons.Default.LiveTv else if (isCinema) Icons.Default.Movie else Icons.Default.Tv,
-                                    contentDescription = null,
-                                    tint = if (isCinema || isKids || isRegional) Color.White else Color.Black,
-                                    modifier = Modifier.size(26.dp)
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.linearGradient(
+                                                if (isCustom) listOf(StadiumGreenPrimary, Color(0xFF00E676))
+                                                else if (isCatholic) listOf(Color(0xFFFFD54F), Color(0xFFFF9800))
+                                                else if (isCinema) listOf(Color(0xFFBA68C8), Color(0xFF673AB7))
+                                                else if (isKids) listOf(Color(0xFFFF8A65), Color(0xFFFF5252))
+                                                else if (isRegional) listOf(Color(0xFF4FC3F7), Color(0xFF0288D1))
+                                                else listOf(StadiumGreenPrimary, StadiumCyanSecondary)
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (isCustom) Icons.Default.Link else if (isCatholic) Icons.Default.LiveTv else if (isCinema) Icons.Default.Movie else Icons.Default.Tv,
+                                        contentDescription = null,
+                                        tint = if (isCinema || isKids || isRegional) Color.White else Color.Black,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+
+                                // Bolinha no canto indicando funcionamento do canal (Verde = funcionando, Vermelho = não funcionando) - Visível apenas para ADMIN
+                                if (isAdmin) {
+                                    val isWorking = channel.isWorking
+                                    val dotColor = if (isWorking) Color(0xFF00E676) else Color(0xFFFF1744)
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .size(15.dp)
+                                            .clip(CircleShape)
+                                            .background(dotColor)
+                                            .border(2.5.dp, MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                                            .clickable {
+                                                onToggleChannelWorkingStatus(channel.id)
+                                            }
+                                            .testTag("status_dot_${channel.id}")
+                                    )
+                                }
                             }
 
                             Spacer(modifier = Modifier.width(14.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = channel.title,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = channel.title,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                val displayCategory = if (cat.isNotBlank()) cat else badgeText
+
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Surface(
                                         color = badgeBg,
                                         shape = RoundedCornerShape(4.dp)
                                     ) {
                                         Text(
-                                            text = badgeText,
+                                            text = displayCategory,
                                             style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Black,
+                                            fontWeight = FontWeight.Bold,
                                             color = badgeColor,
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                             fontSize = 9.sp
                                         )
                                     }
+
+                                    // Badge de status visual abaixo da categoria (Apenas Admin)
+                                    if (isAdmin) {
+                                        val isWorking = channel.isWorking
+                                        Surface(
+                                            color = if (isWorking) Color(0xFF00E676).copy(alpha = 0.18f) else Color(0xFFFF1744).copy(alpha = 0.22f),
+                                            shape = RoundedCornerShape(6.dp),
+                                            border = BorderStroke(1.dp, if (isWorking) Color(0xFF00E676).copy(alpha = 0.5f) else Color(0xFFFF1744).copy(alpha = 0.6f)),
+                                            modifier = Modifier
+                                                .clickable { onToggleChannelWorkingStatus(channel.id) }
+                                                .testTag("badge_status_${channel.id}")
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(7.5.dp)
+                                                        .clip(CircleShape)
+                                                        .background(if (isWorking) Color(0xFF00E676) else Color(0xFFFF1744))
+                                                )
+                                                Spacer(modifier = Modifier.width(5.dp))
+                                                Text(
+                                                    text = if (isWorking) "Funcionando" else "Fora do Ar",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (isWorking) Color(0xFF00E676) else Color(0xFFFF5252),
+                                                    fontSize = 9.sp
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Icon(
+                                                    imageVector = Icons.Default.Refresh,
+                                                    contentDescription = "Alternar Status",
+                                                    tint = if (isWorking) Color(0xFF00E676) else Color(0xFFFF5252),
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
-                                Text(
-                                    text = channel.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+
+                                if (channel.subtitle.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text(
+                                        text = channel.subtitle,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { onToggleFavorite(channel.id) },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("btn_favorite_channel_${channel.id}")
+                            ) {
+                                Icon(
+                                    imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = if (channel.isFavorite) "Desfavoritar Canal" else "Favoritar Canal",
+                                    tint = if (channel.isFavorite) StadiumAccentRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
                             if (isAdmin) {
+                                IconButton(
+                                    onClick = { onToggleChannelWorkingStatus(channel.id) },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("btn_toggle_status_${channel.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = if (channel.isWorking) Icons.Default.CheckCircle else Icons.Default.Close,
+                                        contentDescription = if (channel.isWorking) "Mudar para Fora do Ar" else "Mudar para Funcionando",
+                                        tint = if (channel.isWorking) Color(0xFF00E676) else Color(0xFFFF5252),
+                                        modifier = Modifier.size(19.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { onTestSingleChannel(channel.id) },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("btn_test_channel_${channel.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.NetworkCheck,
+                                        contentDescription = "Testar canal ${channel.title}",
+                                        tint = StadiumCyanSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
                                 IconButton(
                                     onClick = {
                                         editingChannel = channel
@@ -1413,6 +1930,7 @@ fun ChannelsGridContent(
                                         editSubtitleInput = channel.subtitle
                                         editUrlInput = if (channel.streamUrl.isNotBlank()) channel.streamUrl else (channel.embedUrl ?: "")
                                         editIsWebPlayer = channel.forceWebPlayer
+                                        editIsWorking = channel.isWorking
                                         val knownCategories = listOf("Esportes", "Católicos (CXTV)", "Desenhos & Kids", "Filmes & Séries", "Abertos & Regionais")
                                         val curCategory = channel.category ?: "Esportes"
                                         if (curCategory in knownCategories) {
@@ -1520,12 +2038,16 @@ fun ChannelsGridContent(
             }
         }
     }
+}
 
     // Modal Dialog to Add Quick Channel (Admin only)
     if (showAddDialog) {
         val clipboardManager = LocalClipboardManager.current
 
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showAddDialog = false }) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showAddDialog = false },
+            properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = true)
+        ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1684,6 +2206,81 @@ fun ChannelsGridContent(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    // Status de Funcionamento do Canal (Abaixo do campo de Categoria)
+                    Text(
+                        text = "Status do Canal:",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (channelIsWorkingInput) Color(0xFF00E676).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            border = BorderStroke(1.dp, if (channelIsWorkingInput) Color(0xFF00E676) else MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { channelIsWorkingInput = true }
+                                .testTag("btn_status_working_add")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(vertical = 10.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF00E676))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Funcionando",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (channelIsWorkingInput) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (channelIsWorkingInput) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (!channelIsWorkingInput) Color(0xFFFF1744).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            border = BorderStroke(1.dp, if (!channelIsWorkingInput) Color(0xFFFF1744) else MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { channelIsWorkingInput = false }
+                                .testTag("btn_status_offline_add")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(vertical = 10.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFF1744))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Fora do Ar",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (!channelIsWorkingInput) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (!channelIsWorkingInput) Color(0xFFFF5252) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     // Campo: Descrição / Subtítulo
                     OutlinedTextField(
                         value = channelSubtitleInput,
@@ -1830,7 +2427,8 @@ fun ChannelsGridContent(
                                     channelSubtitleInput.trim(),
                                     channelUrlInput.trim(),
                                     isWebPlayerOption,
-                                    finalCategory
+                                    finalCategory,
+                                    channelIsWorkingInput
                                 )
                                 showAddDialog = false
                             },
@@ -1855,7 +2453,10 @@ fun ChannelsGridContent(
         val clipboardManager = LocalClipboardManager.current
         val isTargetCustom = targetChannel.id.startsWith("custom_")
 
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showEditDialog = false }) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showEditDialog = false },
+            properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = true)
+        ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2009,6 +2610,81 @@ fun ChannelsGridContent(
                                     focusedLabelColor = StadiumCyanSecondary
                                 )
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Status de Funcionamento do Canal (Abaixo do campo de Categoria)
+                    Text(
+                        text = "Status de Funcionamento:",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (editIsWorking) Color(0xFF00E676).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            border = BorderStroke(1.dp, if (editIsWorking) Color(0xFF00E676) else MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { editIsWorking = true }
+                                .testTag("btn_status_working_edit")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(vertical = 10.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF00E676))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Funcionando",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (editIsWorking) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (editIsWorking) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (!editIsWorking) Color(0xFFFF1744).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            border = BorderStroke(1.dp, if (!editIsWorking) Color(0xFFFF1744) else MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { editIsWorking = false }
+                                .testTag("btn_status_offline_edit")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(vertical = 10.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFF1744))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Fora do Ar",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (!editIsWorking) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (!editIsWorking) Color(0xFFFF5252) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
 
@@ -2191,7 +2867,8 @@ fun ChannelsGridContent(
                                     editSubtitleInput.trim(),
                                     editUrlInput.trim(),
                                     editIsWebPlayer,
-                                    finalEditCategory
+                                    finalEditCategory,
+                                    editIsWorking
                                 )
                                 showEditDialog = false
                             },
@@ -2241,7 +2918,10 @@ fun ChannelsGridContent(
 
     // Dialog: Gerenciar e Criar Categorias de Canais Rápidos
     if (showCreateCategoryDialog) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showCreateCategoryDialog = false }) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showCreateCategoryDialog = false },
+            properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = true)
+        ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2433,9 +3113,13 @@ fun ChannelsGridContent(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Lista de categorias customizadas criadas
+                    val allManageableCategories = remember(categories, customCategories, channels) {
+                        categories.filter { it != "Todos" && it != "⭐ Favoritos" && it != "Personalizados" && it != "Outros" }
+                    }
+
+                    // Lista de todas as categorias existentes
                     Text(
-                        text = "Categorias Criadas (${customCategories.size})",
+                        text = "Categorias Existentes (${allManageableCategories.size})",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -2443,14 +3127,14 @@ fun ChannelsGridContent(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    if (customCategories.isEmpty()) {
+                    if (allManageableCategories.isEmpty()) {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "Nenhuma categoria personalizada criada ainda.",
+                                text = "Nenhuma categoria encontrada.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(12.dp)
@@ -2460,10 +3144,10 @@ fun ChannelsGridContent(
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(140.dp),
+                                .height(180.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            items(customCategories) { cat ->
+                            items(allManageableCategories) { cat ->
                                 val count = channels.count { it.category.equals(cat, ignoreCase = true) }
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
@@ -2513,24 +3197,22 @@ fun ChannelsGridContent(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            if (isAdmin) {
-                                                IconButton(
-                                                    onClick = {
-                                                        editingCategory = cat
-                                                        editCategoryNameInput = cat
-                                                        editCategoryError = null
-                                                    },
-                                                    modifier = Modifier
-                                                        .size(32.dp)
-                                                        .testTag("btn_edit_category_$cat")
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Edit,
-                                                        contentDescription = "Editar categoria",
-                                                        tint = StadiumGreenPrimary,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
+                                            IconButton(
+                                                onClick = {
+                                                    editingCategory = cat
+                                                    editCategoryNameInput = cat
+                                                    editCategoryError = null
+                                                },
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .testTag("btn_edit_category_$cat")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "Editar categoria",
+                                                    tint = StadiumGreenPrimary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
                                             }
 
                                             IconButton(
@@ -2658,17 +3340,34 @@ fun SupportContent(
     onDownloadWvc: (String) -> Unit,
     onInstallWvc: (Context) -> Unit,
     onDismissWvcInstallPrompt: () -> Unit,
+    onUpdateSupportWhatsapp: (String) -> Unit = {},
+    onToggleRegistrationEnabled: (Boolean) -> Unit = {},
     networkStatus: NetworkStatus
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val developerName = "Alex Queiroz"
-    val whatsappNumber = "(75) 9 9249-0975"
-    val whatsappClean = "5575992490975"
+    val whatsappNumber = uiState.supportWhatsappNumber.ifBlank { "(75) 9 9249-0975" }
+    val digitsOnly = whatsappNumber.filter { it.isDigit() }
+    val whatsappClean = if (digitsOnly.startsWith("55")) digitsOnly else "55$digitsOnly"
+
+    var showEditWhatsappDialog by remember { mutableStateOf(false) }
+    var newWhatsappInput by remember(whatsappNumber) { mutableStateOf(whatsappNumber) }
 
     val isAdmin = currentUser?.role == "ADMIN" || currentUser?.cpf == "06462555505"
     var versionNameInput by remember(uiState.latestVersionName) { mutableStateOf(uiState.latestVersionName) }
     var apkUrlInput by remember(uiState.latestApkUrl) { mutableStateOf(uiState.latestApkUrl) }
+
+    var currentTimeString by remember { mutableStateOf("") }
+    LaunchedEffect(isAdmin) {
+        if (isAdmin) {
+            val sdf = java.text.SimpleDateFormat("dd/MM/yyyy • HH:mm:ss", java.util.Locale("pt", "BR"))
+            while (true) {
+                currentTimeString = sdf.format(java.util.Date())
+                delay(1000L)
+            }
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -2677,6 +3376,77 @@ fun SupportContent(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Data e Hora em Tempo Real (Visível Apenas para Admin)
+        if (isAdmin) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = StadiumGreenPrimary.copy(alpha = 0.12f)
+                    ),
+                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_realtime_clock_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = CircleShape,
+                                color = StadiumGreenPrimary.copy(alpha = 0.2f),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.AccessTime,
+                                        contentDescription = "Data e Hora em Tempo Real",
+                                        tint = StadiumGreenPrimary
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column {
+                                Text(
+                                    text = "Data e Hora (Painel Admin)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = StadiumGreenPrimary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (currentTimeString.isNotBlank()) currentTimeString else "Carregando...",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Black,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = StadiumGreenPrimary,
+                            modifier = Modifier.padding(start = 8.dp)
+                        ) {
+                            Text(
+                                text = "TEMPO REAL",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.Black,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+        }
+
         // Status de Conexão com a Internet Card
         item {
             Card(
@@ -3182,8 +3952,372 @@ fun SupportContent(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Copiar Número de Contato")
                     }
+
+                    if (isAdmin) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = {
+                                newWhatsappInput = whatsappNumber
+                                showEditWhatsappDialog = true
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("btn_edit_support_whatsapp"),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = StadiumGreenPrimary
+                            ),
+                            border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.6f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Alterar Número do WhatsApp",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Alterar Número do WhatsApp (Admin)", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
+
+        // Painel do Admin: Suspender Criação de Contas
+        if (isAdmin) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_suspend_registration_card")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = StadiumGreenPrimary.copy(alpha = 0.15f),
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Block,
+                                            contentDescription = "Suspender Contas",
+                                            tint = StadiumGreenPrimary,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Controle de Cadastros",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (uiState.isRegistrationEnabled) "Criação de contas permitida" else "Criação de contas suspensa",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (uiState.isRegistrationEnabled) StadiumGreenPrimary else MaterialTheme.colorScheme.error,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.background.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Suspender criação na Tela de Login",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Impede novos usuários de se cadastrarem pelo aplicativo.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Switch(
+                                    checked = !uiState.isRegistrationEnabled,
+                                    onCheckedChange = { suspended ->
+                                        val newValue = !suspended
+                                        onToggleRegistrationEnabled(newValue)
+                                        val statusText = if (suspended) "Criação de contas suspensa com sucesso!" else "Criação de contas reativada!"
+                                        Toast.makeText(context, statusText, Toast.LENGTH_SHORT).show()
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = MaterialTheme.colorScheme.error,
+                                        checkedTrackColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f),
+                                        uncheckedThumbColor = StadiumGreenPrimary,
+                                        uncheckedTrackColor = StadiumGreenPrimary.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier.testTag("switch_suspend_registration")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Ícone Oficial do Aplicativo (Abaixo do Suporte - Visível Apenas para Admin)
+        if (isAdmin) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_app_icon_card")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = StadiumCyanSecondary.copy(alpha = 0.15f),
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.AdminPanelSettings,
+                                            contentDescription = "Ícone do Aplicativo",
+                                            tint = StadiumCyanSecondary,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Logomarca Oficial",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Identidade visual do FutePlayer",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = StadiumCyanSecondary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = StadiumCyanSecondary.copy(alpha = 0.2f),
+                                border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f)),
+                                modifier = Modifier.padding(start = 8.dp)
+                            ) {
+                                Text(
+                                    text = "ADMIN",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = StadiumCyanSecondary,
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    brush = Brush.verticalGradient(
+                                        listOf(
+                                            Color(0xFF0D1B2A),
+                                            Color(0xFF1B263B)
+                                        )
+                                    ),
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = StadiumGreenPrimary.copy(alpha = 0.35f),
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                .padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(180.dp)
+                                    .clip(RoundedCornerShape(28.dp))
+                                    .border(
+                                        width = 2.dp,
+                                        brush = Brush.linearGradient(
+                                            listOf(StadiumGreenPrimary, StadiumCyanSecondary)
+                                        ),
+                                        shape = RoundedCornerShape(28.dp)
+                                    )
+                                    .background(Color.Black),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Image(
+                                    painter = painterResource(id = R.drawable.futeplayer_app_icon),
+                                    contentDescription = "Ícone Atual do Aplicativo FutePlayer",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(RoundedCornerShape(28.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Text(
+                                text = "FutePlayer",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Ícone oficial em uso no aplicativo para launcher, tela inicial, splash screen e notificações.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White.copy(alpha = 0.8f),
+                                textAlign = TextAlign.Center,
+                                lineHeight = 18.sp
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = StadiumGreenPrimary.copy(alpha = 0.2f),
+                                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f))
+                                ) {
+                                    Text(
+                                        text = "ÍCONE ATIVO",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = StadiumGreenPrimary,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = StadiumCyanSecondary.copy(alpha = 0.2f),
+                                    border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f))
+                                ) {
+                                    Text(
+                                        text = "ALTA RESOLUÇÃO",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = StadiumCyanSecondary,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showEditWhatsappDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditWhatsappDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = null,
+                        tint = StadiumGreenPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Alterar Contato do Suporte")
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        text = "Informe o novo número do WhatsApp de suporte (com DDD) que será exibido aos usuários.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    OutlinedTextField(
+                        value = newWhatsappInput,
+                        onValueChange = { newWhatsappInput = it },
+                        label = { Text("Número do WhatsApp") },
+                        placeholder = { Text("(75) 9 9249-0975") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_edit_support_whatsapp")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = newWhatsappInput.trim()
+                        if (trimmed.isNotBlank()) {
+                            onUpdateSupportWhatsapp(trimmed)
+                            showEditWhatsappDialog = false
+                            Toast.makeText(context, "Número de suporte atualizado!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.testTag("btn_save_support_whatsapp"),
+                    colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary, contentColor = Color.Black)
+                ) {
+                    Text("Salvar", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditWhatsappDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
     }
 }

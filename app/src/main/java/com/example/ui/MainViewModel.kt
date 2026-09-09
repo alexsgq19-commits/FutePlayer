@@ -12,8 +12,13 @@ import com.example.cast.CastManager
 import com.example.cast.CastUiState
 import com.example.data.FutemaisRepository
 import com.example.data.models.ChannelOption
+import com.example.data.models.ChannelTestSummary
+import com.example.data.models.EpisodeItem
 import com.example.data.models.MatchItem
+import com.example.data.models.MediaContentType
+import com.example.data.models.MediaItem
 import com.example.data.models.PlayableVideo
+import com.example.data.models.SeasonItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +31,7 @@ import kotlinx.coroutines.launch
 import com.example.data.UserRepository
 import com.example.data.models.User
 import com.example.notifications.AppNotificationManager
+import com.example.util.SearchUtils
 import kotlinx.coroutines.delay
 
 sealed interface UiScreen {
@@ -37,6 +43,7 @@ sealed interface UiScreen {
 enum class NavigationTab {
     MATCHES,
     CHANNELS,
+    MOVIES_SERIES,
     SUPPORT
 }
 
@@ -55,6 +62,7 @@ data class HomeUiState(
     val filteredMatches: List<MatchItem> = emptyList(),
     val quickChannels: List<PlayableVideo> = emptyList(),
     val customCategories: List<String> = emptyList(),
+    val mediaCatalog: List<MediaItem> = emptyList(),
     val selectedMatch: MatchItem? = null,
     val selectedMatchChannels: List<ChannelOption> = emptyList(),
     val isLoadingChannels: Boolean = false,
@@ -75,7 +83,13 @@ data class HomeUiState(
     val isDownloadingWvc: Boolean = false,
     val wvcDownloadProgress: Float = 0f,
     val wvcDownloadError: String? = null,
-    val showWvcInstallPromptDialog: Boolean = false
+    val showWvcInstallPromptDialog: Boolean = false,
+    val supportWhatsappNumber: String = "(75) 9 9249-0975",
+    val isRegistrationEnabled: Boolean = true,
+    val isTestingChannels: Boolean = false,
+    val channelTestProgressText: String? = null,
+    val lastChannelTestSummary: ChannelTestSummary? = null,
+    val adminChannelAlert: String? = null
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -118,6 +132,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var downloadedUpdateFile: java.io.File? = null
     private var downloadedWvcFile: java.io.File? = null
 
+    private val _loginNoticeMessage = MutableStateFlow<String?>(null)
+    val loginNoticeMessage: StateFlow<String?> = _loginNoticeMessage.asStateFlow()
+
+    fun clearLoginNotice() {
+        _loginNoticeMessage.value = null
+    }
+
+    private var observeUserJob: kotlinx.coroutines.Job? = null
+
+    private fun startObservingCurrentUser(user: User) {
+        observeUserJob?.cancel()
+        observeUserJob = viewModelScope.launch {
+            userRepository.observeUser(user.uid).collect { updatedUser ->
+                if (updatedUser == null) return@collect
+                val myDeviceId = getDeviceId()
+
+                if (!updatedUser.isActive) {
+                    logout("Sua conta foi desativada pelo administrador.")
+                    return@collect
+                }
+
+                val remoteDeviceId = updatedUser.deviceId.ifBlank { updatedUser.sessionToken }
+                if (remoteDeviceId.isNotBlank() && remoteDeviceId != myDeviceId) {
+                    android.util.Log.w("MainViewModel", "Sessão duplicada: desconectando dispositivo $myDeviceId em prol de $remoteDeviceId")
+                    logout("Sua conta foi conectada em outro dispositivo. Você foi desconectado automaticamente.")
+                }
+            }
+        }
+    }
+
+    fun getDeviceId(): String {
+        var id = sharedPrefs.getString("device_unique_id", null)
+        if (id.isNullOrBlank()) {
+            id = java.util.UUID.randomUUID().toString()
+            sharedPrefs.edit().putString("device_unique_id", id).apply()
+        }
+        return id
+    }
+
     init {
         val savedUrl = sharedPrefs.getString("latest_apk_url", "") ?: ""
         val savedVersion = sharedPrefs.getString("latest_version_name", "1.0.0") ?: "1.0.0"
@@ -128,17 +181,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(
             quickChannels = repository.getQuickChannels(),
             customCategories = repository.getCustomCategories(),
+            mediaCatalog = repository.getMediaCatalog(),
             latestApkUrl = savedUrl,
             latestVersionName = savedVersion,
             hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.0.0",
-            webVideoCasterUrl = finalWvcUrl
+            webVideoCasterUrl = finalWvcUrl,
+            supportWhatsappNumber = repository.getSupportWhatsappNumber()
         )
+
+        viewModelScope.launch {
+            repository.mediaCatalogFlow.collect { catalog ->
+                _uiState.value = _uiState.value.copy(mediaCatalog = catalog)
+            }
+        }
         
         repository.syncFromFirestore {
             _uiState.value = _uiState.value.copy(
                 quickChannels = repository.getQuickChannels(),
                 customCategories = repository.getCustomCategories()
             )
+        }
+
+        repository.syncSupportWhatsappFromFirestore { number ->
+            if (number.isNotBlank()) {
+                _uiState.value = _uiState.value.copy(supportWhatsappNumber = number)
+            }
         }
         
         repository.syncUpdateFromFirestore { url, version, timestamp ->
@@ -162,6 +229,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repository.syncWvcUrlFromFirestore { url ->
             _uiState.value = _uiState.value.copy(webVideoCasterUrl = url)
         }
+
+        repository.syncRegistrationEnabledFromFirestore { enabled ->
+            _uiState.value = _uiState.value.copy(isRegistrationEnabled = enabled)
+        }
         
         loadMatches(isRefresh = false)
         startNetworkMonitoring()
@@ -179,12 +250,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             
             val savedUid = sharedPrefs.getString("saved_uid", null)
             if (savedUid != null) {
-                val result = userRepository.getUser(savedUid)
+                val result = userRepository.getUserFromServer(savedUid)
                 result.onSuccess { user ->
                     if (user != null && user.isActive) {
-                        val activeUser = user.copy(isOnline = true, lastSeen = System.currentTimeMillis())
+                        val myDeviceId = getDeviceId()
+                        val mySessionToken = java.util.UUID.randomUUID().toString()
+                        val activeUser = user.copy(
+                            isOnline = true,
+                            lastSeen = System.currentTimeMillis(),
+                            deviceId = myDeviceId,
+                            sessionToken = mySessionToken
+                        )
                         _currentUser.value = activeUser
-                        userRepository.updateUserPresence(user.uid, isOnline = true)
+                        userRepository.updateUserPresence(
+                            uid = user.uid,
+                            isOnline = true,
+                            deviceId = myDeviceId,
+                            sessionToken = mySessionToken
+                        )
+                        startObservingCurrentUser(activeUser)
                     } else {
                         sharedPrefs.edit().remove("saved_uid").apply()
                     }
@@ -192,25 +276,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Heartbeat de presença online a cada 30 segundos
+        // Heartbeat de presença online e validação de dispositivo conectado a cada 6 segundos
         viewModelScope.launch {
             while (true) {
-                delay(30_000L)
+                delay(6_000L)
                 val user = _currentUser.value
                 if (user != null && user.isActive) {
-                    userRepository.updateUserPresence(user.uid, isOnline = true)
+                    val myDeviceId = getDeviceId()
+                    val isValidSession = userRepository.updateUserHeartbeat(user.uid, myDeviceId)
+                    if (!isValidSession) {
+                        logout("Sua conta foi conectada em outro dispositivo. Você foi desconectado automaticamente.")
+                    }
                 }
             }
         }
 
-        // Monitora o status ativo do usuário atual em tempo real
+        // Monitora o status ativo do usuário atual e o dispositivo conectado em tempo real pela lista geral
         viewModelScope.launch {
             allUsers.collect { usersList ->
                 val current = _currentUser.value
                 if (current != null) {
                     val updatedSelf = usersList.find { it.uid == current.uid }
                     if (updatedSelf == null || !updatedSelf.isActive) {
-                        logout()
+                        logout("Sua conta foi desativada pelo administrador.")
+                    } else {
+                        val remoteDeviceId = updatedSelf.deviceId.ifBlank { updatedSelf.sessionToken }
+                        if (remoteDeviceId.isNotBlank() && remoteDeviceId != getDeviceId()) {
+                            logout("Sua conta foi conectada em outro dispositivo. Você foi desconectado automaticamente.")
+                        }
                     }
                 }
             }
@@ -218,10 +311,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             repository.favoriteIds.collect { favs ->
-                val updatedMatches = _uiState.value.matches.map { it.copy(isFavorite = favs.contains(it.id)) }
+                val updatedChannels = _uiState.value.quickChannels.map { it.copy(isFavorite = favs.contains(it.id)) }
                 _uiState.value = _uiState.value.copy(
-                    matches = updatedMatches,
-                    filteredMatches = applyFilter(updatedMatches, _uiState.value.searchQuery, _uiState.value.selectedChampionship, _uiState.value.currentTab, favs)
+                    quickChannels = updatedChannels
                 )
             }
         }
@@ -330,9 +422,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         if (query.isNotBlank()) {
             list = list.filter {
-                it.homeTeam.contains(query, ignoreCase = true) ||
-                it.awayTeam.contains(query, ignoreCase = true) ||
-                it.championship.contains(query, ignoreCase = true)
+                SearchUtils.matchesCombined(query, it.homeTeam, it.awayTeam, it.championship, it.time, it.dateTag)
             }
         }
 
@@ -414,6 +504,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleFavorite(id: String) {
         repository.toggleFavorite(id)
+        val favs = repository.favoriteIds.value
+        val updatedChannels = _uiState.value.quickChannels.map { it.copy(isFavorite = favs.contains(it.id)) }
+        _uiState.value = _uiState.value.copy(
+            quickChannels = updatedChannels
+        )
     }
 
     fun addQuickChannel(
@@ -421,7 +516,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         subtitle: String,
         url: String,
         isWebPlayer: Boolean,
-        category: String = "Esportes"
+        category: String = "Esportes",
+        isWorking: Boolean = true
     ) {
         val cleanUrl = url.trim()
         val cleanTitle = if (title.isNotBlank()) title.trim() else "Canal Rápido"
@@ -436,12 +532,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             embedUrl = if (isWebPlayer) cleanUrl else null,
             forceWebPlayer = isWebPlayer,
             isLive = true,
-            category = category
+            category = category,
+            isWorking = isWorking
         )
 
         val updatedChannels = repository.addCustomChannel(newChannel)
+        if (!isWorking) {
+            repository.setChannelWorkingStatus(id, false)
+        }
         _uiState.value = _uiState.value.copy(
-            quickChannels = updatedChannels,
+            quickChannels = repository.getQuickChannels(),
             customCategories = repository.getCustomCategories()
         )
 
@@ -487,13 +587,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         subtitle: String,
         url: String,
         isWebPlayer: Boolean,
-        category: String = "Esportes"
+        category: String = "Esportes",
+        isWorking: Boolean? = null
     ) {
         val cleanUrl = url.trim()
         val cleanTitle = if (title.isNotBlank()) title.trim() else "Canal Rápido"
         val cleanSubtitle = if (subtitle.isNotBlank()) subtitle.trim() else ""
 
         val existing = _uiState.value.quickChannels.find { it.id == id }
+        val targetWorking = isWorking ?: existing?.isWorking ?: true
         val updatedChannel = (existing ?: PlayableVideo(id = id, title = cleanTitle, subtitle = cleanSubtitle, streamUrl = cleanUrl)).copy(
             id = id,
             title = cleanTitle,
@@ -502,14 +604,138 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             embedUrl = if (isWebPlayer) cleanUrl else existing?.embedUrl,
             forceWebPlayer = isWebPlayer,
             isLive = true,
-            category = category
+            category = category,
+            isWorking = targetWorking
         )
 
-        val updatedChannels = repository.updateQuickChannel(updatedChannel)
+        repository.updateQuickChannel(updatedChannel)
+        repository.setChannelWorkingStatus(id, targetWorking)
         _uiState.value = _uiState.value.copy(
-            quickChannels = updatedChannels,
+            quickChannels = repository.getQuickChannels(),
             customCategories = repository.getCustomCategories()
         )
+    }
+
+    fun toggleChannelWorkingStatus(channelId: String) {
+        val updated = repository.toggleChannelWorkingStatus(channelId)
+        _uiState.value = _uiState.value.copy(quickChannels = updated)
+        val channel = updated.find { it.id == channelId }
+        if (channel != null) {
+            val statusEmoji = if (channel.isWorking) "✅" else "🔴"
+            val statusName = if (channel.isWorking) "FUNCIONANDO" else "FORA DO AR"
+            _uiState.value = _uiState.value.copy(
+                adminChannelAlert = "$statusEmoji Status de \"${channel.title}\" alterado para $statusName"
+            )
+        }
+    }
+
+    fun setChannelWorkingStatus(channelId: String, isWorking: Boolean) {
+        val updated = repository.setChannelWorkingStatus(channelId, isWorking)
+        _uiState.value = _uiState.value.copy(quickChannels = updated)
+        val channel = updated.find { it.id == channelId }
+        if (channel != null) {
+            val statusEmoji = if (isWorking) "✅" else "🔴"
+            val statusName = if (isWorking) "FUNCIONANDO" else "FORA DO AR"
+            _uiState.value = _uiState.value.copy(
+                adminChannelAlert = "$statusEmoji Status de \"${channel.title}\" alterado para $statusName"
+            )
+        }
+    }
+
+    private fun isCurrentUserAdmin(): Boolean {
+        val user = _currentUser.value
+        return user?.role == "ADMIN" || user?.cpf == "06462555505"
+    }
+
+    fun testAllChannels(isAdmin: Boolean = isCurrentUserAdmin()) {
+        if (_uiState.value.isTestingChannels) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isTestingChannels = true,
+                channelTestProgressText = "Iniciando verificação de canais...",
+                adminChannelAlert = null
+            )
+            try {
+                val summary = repository.testAllChannels { index, total, channel, isWorking ->
+                    val statusEmoji = if (isWorking) "🟢" else "🔴"
+                    _uiState.value = _uiState.value.copy(
+                        channelTestProgressText = "Testando ($index/$total): ${channel.title} $statusEmoji"
+                    )
+                }
+
+                val updatedList = repository.getQuickChannels()
+                val alertMsg = if (summary.offlineCount > 0) {
+                    val offlineNames = summary.offlineChannels.take(3).joinToString { it.title }
+                    val extra = if (summary.offlineChannels.size > 3) " e +${summary.offlineChannels.size - 3}" else ""
+                    "⚠️ Atenção Admin: ${summary.offlineCount} canais fora do ar ($offlineNames$extra)"
+                } else {
+                    "✅ Diagnóstico: Todos os ${summary.workingCount} canais estão funcionando normalmente!"
+                }
+
+                _uiState.value = _uiState.value.copy(
+                    isTestingChannels = false,
+                    channelTestProgressText = null,
+                    quickChannels = updatedList,
+                    lastChannelTestSummary = summary,
+                    adminChannelAlert = alertMsg
+                )
+
+                if (isAdmin && summary.offlineCount > 0) {
+                    notificationManager.showAdminChannelAlertNotification(
+                        title = "⚠️ Alerta Admin: Canais Fora do Ar",
+                        message = "${summary.offlineCount} canais estão inoperantes. Toque para gerenciar.",
+                        offlineCount = summary.offlineCount
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isTestingChannels = false,
+                    channelTestProgressText = null,
+                    adminChannelAlert = "Falha ao testar canais: ${e.message}"
+                )
+            }
+        }
+    }
+
+    fun testSingleChannel(channelId: String, isAdmin: Boolean = isCurrentUserAdmin()) {
+        viewModelScope.launch {
+            val channel = _uiState.value.quickChannels.find { it.id == channelId } ?: return@launch
+            val isWorking = repository.testSingleChannel(channel)
+            val updated = repository.setChannelWorkingStatus(channelId, isWorking)
+            _uiState.value = _uiState.value.copy(
+                quickChannels = updated,
+                adminChannelAlert = if (!isWorking) "⚠️ O canal \"${channel.title}\" foi testado e está FORA DO AR!" else "✅ O canal \"${channel.title}\" está funcionando normalmente!"
+            )
+            if (isAdmin && !isWorking) {
+                notificationManager.showAdminChannelAlertNotification(
+                    title = "⚠️ Canal Fora do Ar",
+                    message = "O canal \"${channel.title}\" não respondeu e foi marcado como Fora do Ar.",
+                    offlineCount = 1
+                )
+            }
+        }
+    }
+
+    fun reportChannelPlaybackError(channelId: String, isAdmin: Boolean = isCurrentUserAdmin()) {
+        viewModelScope.launch {
+            val channel = _uiState.value.quickChannels.find { it.id == channelId }
+            val updated = repository.setChannelWorkingStatus(channelId, false)
+            _uiState.value = _uiState.value.copy(
+                quickChannels = updated,
+                adminChannelAlert = "⚠️ Erro de reprodução: Canal \"${channel?.title ?: channelId}\" marcado como Fora do Ar."
+            )
+            if (isAdmin) {
+                notificationManager.showAdminChannelAlertNotification(
+                    title = "⚠️ Canal Fora do Ar (Falha de Reprodução)",
+                    message = "O canal \"${channel?.title ?: channelId}\" apresentou erro ao reproduzir.",
+                    offlineCount = 1
+                )
+            }
+        }
+    }
+
+    fun dismissAdminChannelAlert() {
+        _uiState.value = _uiState.value.copy(adminChannelAlert = null)
     }
 
     fun addChannelCategory(name: String) {
@@ -538,6 +764,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteQuickChannel(id: String) {
         val updatedChannels = repository.deleteCustomChannel(id)
         _uiState.value = _uiState.value.copy(quickChannels = updatedChannels)
+    }
+
+    // =========================================================================
+    // FILMES & SÉRIES MEDIA ACTIONS
+    // =========================================================================
+
+    fun addOrUpdateMedia(item: MediaItem) {
+        val updated = repository.addOrUpdateMediaItem(item)
+        _uiState.value = _uiState.value.copy(mediaCatalog = updated)
+    }
+
+    fun deleteMedia(id: String) {
+        val updated = repository.deleteMediaItem(id)
+        _uiState.value = _uiState.value.copy(mediaCatalog = updated)
+    }
+
+    fun toggleMediaFavorite(id: String) {
+        val updated = repository.toggleMediaFavorite(id)
+        _uiState.value = _uiState.value.copy(mediaCatalog = updated)
+    }
+
+    fun playMovie(movie: MediaItem) {
+        val streamUrl = movie.movieStreamUrl.orEmpty()
+        if (streamUrl.isBlank()) return
+        val video = PlayableVideo(
+            id = movie.id,
+            title = movie.title,
+            subtitle = "Filme • ${movie.category} (${movie.year})",
+            streamUrl = streamUrl,
+            posterUrl = movie.backdropUrl ?: movie.coverUrl,
+            isLive = false,
+            embedUrl = if (movie.isWebPlayer) streamUrl else null,
+            forceWebPlayer = movie.isWebPlayer,
+            category = movie.category,
+            isFavorite = movie.isFavorite,
+            isWorking = movie.isWorking
+        )
+        playDirectVideo(video)
+    }
+
+    fun playEpisode(series: MediaItem, season: SeasonItem, episode: EpisodeItem) {
+        val streamUrl = episode.streamUrl
+        if (streamUrl.isBlank()) return
+        val isWeb = episode.isWebPlayer || series.isWebPlayer
+        val video = PlayableVideo(
+            id = episode.id,
+            title = "${series.title} - T${season.seasonNumber}:E${episode.episodeNumber}",
+            subtitle = episode.title.ifBlank { "Episódio ${episode.episodeNumber}" },
+            streamUrl = streamUrl,
+            posterUrl = series.backdropUrl ?: series.coverUrl,
+            isLive = false,
+            embedUrl = if (isWeb) streamUrl else null,
+            forceWebPlayer = isWeb,
+            category = series.category,
+            isFavorite = series.isFavorite,
+            isWorking = series.isWorking
+        )
+        playDirectVideo(video)
     }
 
     fun castCurrentVideo() {
@@ -600,27 +884,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) {}
     }
 
-    fun login(cpf: String, pass: String, rememberMe: Boolean, onResult: (Boolean, String?) -> Unit) {
+    fun login(identifier: String, pass: String, rememberMe: Boolean, onResult: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
-            val result = userRepository.login(cpf, pass)
+            val myDeviceId = getDeviceId()
+            val mySessionToken = java.util.UUID.randomUUID().toString()
+            val result = userRepository.login(identifier, pass, myDeviceId, mySessionToken)
             result.onSuccess { user ->
                 if (user != null) {
                     if (!user.isActive) {
                         onResult(false, "Sua conta está inativa. Contate o administrador.")
                         return@launch
                     }
-                    val onlineUser = user.copy(isOnline = true, lastSeen = System.currentTimeMillis())
+                    val onlineUser = user.copy(
+                        isOnline = true,
+                        lastSeen = System.currentTimeMillis(),
+                        deviceId = myDeviceId,
+                        sessionToken = mySessionToken
+                    )
                     _currentUser.value = onlineUser
-                    userRepository.updateUserPresence(user.uid, isOnline = true)
+                    startObservingCurrentUser(onlineUser)
 
                     if (rememberMe) {
                         sharedPrefs.edit().putString("saved_uid", user.uid).apply()
                     } else {
                         sharedPrefs.edit().remove("saved_uid").apply()
                     }
+                    _loginNoticeMessage.value = null
                     onResult(true, null)
                 } else {
-                    onResult(false, "CPF ou senha inválidos.")
+                    onResult(false, "CPF, celular ou senha inválidos.")
                 }
             }.onFailure { e ->
                 onResult(false, e.localizedMessage ?: "Erro ao realizar login.")
@@ -628,23 +920,101 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun logout() {
+    fun registerUser(
+        name: String,
+        phone: String,
+        cpf: String,
+        pass: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = userRepository.registerUser(name, phone, cpf, pass)
+            result.onSuccess {
+                onResult(true, null)
+            }.onFailure { e ->
+                onResult(false, e.message ?: "Erro ao criar conta.")
+            }
+        }
+    }
+
+    fun changeCurrentUserPassword(newPassword: String, onResult: (Boolean, String?) -> Unit) {
         val user = _currentUser.value
-        if (user != null) {
+        if (user == null) {
+            onResult(false, "Usuário não autenticado.")
+            return
+        }
+        val cleanPassword = newPassword.trim()
+        if (cleanPassword.isBlank()) {
+            onResult(false, "A senha não pode estar em branco.")
+            return
+        }
+
+        val updatedUser = user.copy(password = cleanPassword)
+        viewModelScope.launch {
+            val result = userRepository.saveUser(updatedUser)
+            result.onSuccess {
+                _currentUser.value = updatedUser
+                onResult(true, null)
+            }.onFailure { e ->
+                onResult(false, e.localizedMessage ?: "Erro ao salvar nova senha.")
+            }
+        }
+    }
+
+    fun logout(reason: String? = null) {
+        observeUserJob?.cancel()
+        observeUserJob = null
+
+        val user = _currentUser.value
+        // Se logout foi voluntário pelo usuário (reason == null), remove a presença online.
+        // Se ocorreu por conexão em outro dispositivo (reason != null), NÃO sobrescreve a presença do novo dispositivo.
+        if (user != null && reason == null) {
             viewModelScope.launch {
                 userRepository.updateUserPresence(user.uid, isOnline = false)
             }
         }
         _currentUser.value = null
         sharedPrefs.edit().remove("saved_uid").apply()
+
+        try {
+            disconnectCast()
+        } catch (_: Exception) {}
+
         navigateTo(UiScreen.Home)
+
+        if (!reason.isNullOrBlank()) {
+            _loginNoticeMessage.value = reason
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                android.widget.Toast.makeText(getApplication(), reason, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun checkCurrentSession() {
+        val user = _currentUser.value ?: return
+        viewModelScope.launch {
+            val myDeviceId = getDeviceId()
+            val result = userRepository.getUserFromServer(user.uid)
+            result.onSuccess { remoteUser ->
+                if (remoteUser != null) {
+                    if (!remoteUser.isActive) {
+                        logout("Sua conta foi desativada pelo administrador.")
+                        return@launch
+                    }
+                    val remoteDeviceId = remoteUser.deviceId.ifBlank { remoteUser.sessionToken }
+                    if (remoteDeviceId.isNotBlank() && remoteDeviceId != myDeviceId) {
+                        logout("Sua conta foi conectada em outro dispositivo. Você foi desconectado automaticamente.")
+                    }
+                }
+            }
+        }
     }
 
     fun refreshUserPresence() {
         val user = _currentUser.value
         if (user != null && user.isActive) {
             viewModelScope.launch {
-                userRepository.updateUserPresence(user.uid, isOnline = true)
+                userRepository.updateUserPresence(user.uid, isOnline = true, deviceId = getDeviceId())
             }
         }
     }
@@ -895,6 +1265,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sharedPrefs.edit().putString("wvc_apk_url", cleanUrl).apply()
         _uiState.value = _uiState.value.copy(webVideoCasterUrl = cleanUrl)
         repository.publishWvcUrlToFirestore(cleanUrl)
+    }
+
+    fun updateSupportWhatsappNumber(newNumber: String) {
+        val trimmed = newNumber.trim()
+        if (trimmed.isNotBlank()) {
+            repository.saveSupportWhatsappNumber(trimmed)
+            _uiState.value = _uiState.value.copy(supportWhatsappNumber = trimmed)
+        }
+    }
+
+    fun setRegistrationEnabled(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(isRegistrationEnabled = enabled)
+        repository.publishRegistrationEnabledToFirestore(enabled)
     }
 
     fun downloadWebVideoCaster(apkUrl: String) {

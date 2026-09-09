@@ -4,8 +4,13 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import com.example.data.models.ChannelOption
+import com.example.data.models.ChannelTestSummary
+import com.example.data.models.EpisodeItem
 import com.example.data.models.MatchItem
+import com.example.data.models.MediaContentType
+import com.example.data.models.MediaItem
 import com.example.data.models.PlayableVideo
+import com.example.data.models.SeasonItem
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,51 +38,151 @@ class FutemaisRepository(context: Context) {
         }
     }
 
+    private var channelsListenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+    private var mediaListenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+
+    private fun loadFavorites(): Set<String> {
+        return prefs.getStringSet("favorite_ids", emptySet()) ?: emptySet()
+    }
+
+    private val _favoriteIds = MutableStateFlow<Set<String>>(loadFavorites())
+    val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
+
+    private val _mediaCatalogFlow = MutableStateFlow<List<MediaItem>>(emptyList())
+    val mediaCatalogFlow: StateFlow<List<MediaItem>> = _mediaCatalogFlow.asStateFlow()
+
     init {
         syncFromFirestore {}
+        syncMediaFromFirestore {}
+        _mediaCatalogFlow.value = getMediaCatalog()
+    }
+
+    fun parseChannelsJson(jsonStr: String): List<PlayableVideo> {
+        if (jsonStr.isBlank() || jsonStr == "[]") return emptyList()
+        return try {
+            val arr = org.json.JSONArray(jsonStr)
+            val list = mutableListOf<PlayableVideo>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val idStr = obj.optString("id").takeIf { it.isNotBlank() } ?: "custom_${System.currentTimeMillis()}_$i"
+                val streamUrl = obj.optString("streamUrl").takeIf { it.isNotBlank() } ?: obj.optString("embedUrl")
+                val isForceWeb = obj.optBoolean("forceWebPlayer", false)
+                val embedUrl = obj.optString("embedUrl").takeIf { it.isNotBlank() } ?: if (isForceWeb) streamUrl else null
+                val title = obj.optString("title").takeIf { it.isNotBlank() } ?: "Canal Rápido"
+                val subtitle = obj.optString("subtitle").takeIf { it.isNotBlank() } ?: "Canal Personalizado • Admin"
+                val posterUrl = obj.optString("posterUrl").takeIf { it.isNotBlank() }
+                val category = obj.optString("category").takeIf { it.isNotBlank() } ?: "Esportes"
+                val isWorking = obj.optBoolean("isWorking", true)
+                val isLive = obj.optBoolean("isLive", true)
+
+                list.add(
+                    PlayableVideo(
+                        id = idStr,
+                        title = title,
+                        subtitle = subtitle,
+                        streamUrl = streamUrl,
+                        posterUrl = posterUrl,
+                        isLive = isLive,
+                        embedUrl = embedUrl,
+                        forceWebPlayer = isForceWeb,
+                        category = category,
+                        isWorking = isWorking
+                    )
+                )
+            }
+            list
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing custom channels JSON", e)
+            emptyList()
+        }
     }
 
     fun syncFromFirestore(onComplete: () -> Unit = {}) {
-        firestore?.collection("app_data")?.document("channels")?.get()
-            ?.addOnSuccessListener { doc ->
-                if (doc.exists()) {
+        channelsListenerRegistration?.remove()
+        channelsListenerRegistration = firestore?.collection("app_data")?.document("channels")
+            ?.addSnapshotListener { doc, error ->
+                if (error != null) {
+                    Log.w(TAG, "Notice: could not sync channels from Firestore (${error.message ?: "client offline"})")
+                    onComplete()
+                    return@addSnapshotListener
+                }
+
+                if (doc != null && doc.exists()) {
                     val customCats = doc.getString("custom_channel_categories")
-                    val customChannels = doc.getString("custom_quick_channels")
-                    val deletedIds = doc.get("deleted_channel_ids") as? List<*>
+                    val remoteChannelsJson = doc.getString("custom_quick_channels")
+                    val hasDeletedKey = doc.contains("deleted_channel_ids") || doc.get("deleted_channel_ids") != null
+                    val deletedIds = (doc.get("deleted_channel_ids") as? List<*>)?.mapNotNull { it?.toString() }?.toSet() ?: emptySet()
+                    val hasOfflineKey = doc.contains("offline_channel_ids") || doc.get("offline_channel_ids") != null
+                    val offlineIds = (doc.get("offline_channel_ids") as? List<*>)?.mapNotNull { it?.toString() }?.toSet() ?: emptySet()
 
                     val editor = prefs.edit()
-                    if (customCats != null) {
-                        editor.putString("custom_channel_categories", customCats)
+
+                    if (hasDeletedKey) {
+                        editor.putStringSet("deleted_channel_ids", deletedIds)
                     }
-                    if (customChannels != null) {
-                        editor.putString("custom_quick_channels", customChannels)
+
+                    if (hasOfflineKey) {
+                        editor.putStringSet("offline_channel_ids", offlineIds)
                     }
-                    if (deletedIds != null) {
-                        val stringSet = deletedIds.mapNotNull { it?.toString() }.toSet()
-                        editor.putStringSet("deleted_channel_ids", stringSet)
+
+                    // Smart Merge Categories
+                    if (!customCats.isNullOrBlank()) {
+                        val localCats = getCustomCategories()
+                        val remoteCats = try {
+                            val arr = org.json.JSONArray(customCats)
+                            (0 until arr.length()).map { arr.getString(it) }
+                        } catch (_: Exception) { emptyList() }
+                        val mergedCats = (localCats + remoteCats).distinct()
+                        val arr = org.json.JSONArray()
+                        mergedCats.forEach { arr.put(it) }
+                        editor.putString("custom_channel_categories", arr.toString())
                     }
+
+                    // Smart Merge Custom Channels
+                    if (!remoteChannelsJson.isNullOrBlank()) {
+                        val remoteList = parseChannelsJson(remoteChannelsJson)
+                        val localList = loadCustomChannels()
+                        val currentDeleted = (prefs.getStringSet("deleted_channel_ids", emptySet()) ?: emptySet()) + deletedIds
+
+                        val map = mutableMapOf<String, PlayableVideo>()
+                        // Local first
+                        localList.forEach { ch ->
+                            if (!currentDeleted.contains(ch.id)) {
+                                map[ch.id] = ch
+                            }
+                        }
+                        // Remote overrides / appends
+                        remoteList.forEach { ch ->
+                            if (!currentDeleted.contains(ch.id)) {
+                                map[ch.id] = ch
+                            }
+                        }
+
+                        val mergedList = map.values.toList()
+                        saveCustomChannelsInternal(mergedList, editor)
+                    }
+
                     editor.apply()
                 }
-                onComplete()
-            }
-            ?.addOnFailureListener { e ->
-                Log.e(TAG, "Error fetching channels from Firestore", e)
                 onComplete()
             }
     }
 
     private fun syncToFirestore() {
-        val customCats = prefs.getString("custom_channel_categories", "[]")
-        val customChannels = prefs.getString("custom_quick_channels", "[]")
+        val customCats = prefs.getString("custom_channel_categories", "[]") ?: "[]"
+        val customChannels = prefs.getString("custom_quick_channels", "[]") ?: "[]"
         val deletedIds = prefs.getStringSet("deleted_channel_ids", emptySet())?.toList() ?: emptyList()
+        val offlineIds = prefs.getStringSet("offline_channel_ids", emptySet())?.toList() ?: emptyList()
 
         val data = hashMapOf(
             "custom_channel_categories" to customCats,
             "custom_quick_channels" to customChannels,
-            "deleted_channel_ids" to deletedIds
+            "deleted_channel_ids" to deletedIds,
+            "offline_channel_ids" to offlineIds,
+            "last_updated" to System.currentTimeMillis()
         )
 
-        firestore?.collection("app_data")?.document("channels")?.set(data)
+        firestore?.collection("app_data")?.document("channels")?.set(data, com.google.firebase.firestore.SetOptions.merge())
             ?.addOnFailureListener { e ->
                 Log.e(TAG, "Error saving channels to Firestore", e)
             }
@@ -117,6 +222,25 @@ class FutemaisRepository(context: Context) {
         firestore?.collection("app_data")?.document("wvc_info")?.set(data)
     }
 
+    fun publishRegistrationEnabledToFirestore(enabled: Boolean) {
+        val data = hashMapOf(
+            "registration_enabled" to enabled,
+            "timestamp" to System.currentTimeMillis()
+        )
+        firestore?.collection("app_data")?.document("registration_info")?.set(data)
+    }
+
+    fun syncRegistrationEnabledFromFirestore(onStatusChanged: (enabled: Boolean) -> Unit) {
+        firestore?.collection("app_data")?.document("registration_info")?.addSnapshotListener { doc, error ->
+            if (error != null) return@addSnapshotListener
+            if (doc != null && doc.exists()) {
+                val enabled = doc.getBoolean("registration_enabled") ?: true
+                prefs.edit().putBoolean("registration_enabled", enabled).apply()
+                onStatusChanged(enabled)
+            }
+        }
+    }
+
     fun syncWvcUrlFromFirestore(onUrlFound: (url: String) -> Unit) {
         firestore?.collection("app_data")?.document("wvc_info")?.addSnapshotListener { doc, error ->
             if (error != null) return@addSnapshotListener
@@ -130,17 +254,49 @@ class FutemaisRepository(context: Context) {
         }
     }
 
+    fun getSupportWhatsappNumber(): String {
+        return prefs.getString("support_whatsapp_number", "(75) 9 9249-0975") ?: "(75) 9 9249-0975"
+    }
+
+    fun saveSupportWhatsappNumber(number: String) {
+        prefs.edit().putString("support_whatsapp_number", number).apply()
+        publishSupportWhatsappToFirestore(number)
+    }
+
+    fun publishSupportWhatsappToFirestore(number: String) {
+        val data = hashMapOf(
+            "support_whatsapp_number" to number,
+            "timestamp" to System.currentTimeMillis()
+        )
+        firestore?.collection("app_data")?.document("support_info")?.set(data)
+    }
+
+    fun syncSupportWhatsappFromFirestore(onNumberFound: (number: String) -> Unit) {
+        firestore?.collection("app_data")?.document("support_info")?.addSnapshotListener { doc, error ->
+            if (error != null) return@addSnapshotListener
+            if (doc != null && doc.exists()) {
+                val number = doc.getString("support_whatsapp_number") ?: ""
+                if (number.isNotBlank()) {
+                    prefs.edit().putString("support_whatsapp_number", number).apply()
+                    onNumberFound(number)
+                }
+            }
+        }
+    }
+
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
-    private val _favoriteIds = MutableStateFlow<Set<String>>(loadFavorites())
-    val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
-
-    private fun loadFavorites(): Set<String> {
-        return prefs.getStringSet("favorite_ids", emptySet()) ?: emptySet()
+    private val channelTestClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
     }
 
     val defaultCategories = listOf(
@@ -181,11 +337,47 @@ class FutemaisRepository(context: Context) {
         } catch (_: Exception) {}
     }
 
+    fun getCategoryRenames(): Map<String, String> {
+        val jsonStr = prefs.getString("category_renames_map", null) ?: return emptyMap()
+        return try {
+            val obj = org.json.JSONObject(jsonStr)
+            val map = mutableMapOf<String, String>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                map[k] = obj.getString(k)
+            }
+            map
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun saveCategoryRename(oldName: String, newName: String) {
+        val current = getCategoryRenames().toMutableMap()
+        current[oldName] = newName
+        current.forEach { (k, v) ->
+            if (v.equals(oldName, ignoreCase = true)) {
+                current[k] = newName
+            }
+        }
+        val obj = org.json.JSONObject()
+        current.forEach { (k, v) -> obj.put(k, v) }
+        prefs.edit().putString("category_renames_map", obj.toString()).apply()
+    }
+
+    fun getEffectiveDefaultCategories(): List<String> {
+        val renames = getCategoryRenames()
+        return defaultCategories.map { cat ->
+            renames[cat] ?: cat
+        }.distinct()
+    }
+
     fun addCustomCategory(category: String): List<String> {
         val clean = category.trim()
         if (clean.isBlank()) return getCustomCategories()
         val current = getCustomCategories().toMutableList()
-        val isDefault = defaultCategories.any { it.equals(clean, ignoreCase = true) }
+        val isDefault = getEffectiveDefaultCategories().any { it.equals(clean, ignoreCase = true) }
         val alreadyExists = current.any { it.equals(clean, ignoreCase = true) }
         if (!isDefault && !alreadyExists) {
             current.add(clean)
@@ -195,9 +387,35 @@ class FutemaisRepository(context: Context) {
     }
 
     fun deleteCustomCategory(category: String): List<String> {
+        val clean = category.trim()
         val current = getCustomCategories().toMutableList()
-        current.removeAll { it.equals(category.trim(), ignoreCase = true) }
+        current.removeAll { it.equals(clean, ignoreCase = true) }
         saveCustomCategories(current)
+
+        if (defaultCategories.any { it.equals(clean, ignoreCase = true) } || getCategoryRenames().containsKey(clean)) {
+            saveCategoryRename(clean, "Outros")
+        }
+
+        val customChannels = loadCustomChannels().toMutableList()
+        val allChannels = getQuickChannels()
+        var changed = false
+        for (ch in allChannels) {
+            if (ch.category.equals(clean, ignoreCase = true)) {
+                val updatedCh = ch.copy(category = "Outros")
+                val cIdx = customChannels.indexOfFirst { it.id == ch.id }
+                if (cIdx >= 0) {
+                    customChannels[cIdx] = updatedCh
+                } else {
+                    customChannels.add(updatedCh)
+                }
+                changed = true
+            }
+        }
+        if (changed) {
+            saveCustomChannels(customChannels)
+            syncToFirestore()
+        }
+
         return getCustomCategories()
     }
 
@@ -205,31 +423,46 @@ class FutemaisRepository(context: Context) {
         val cleanOld = oldName.trim()
         val cleanNew = newName.trim()
         if (cleanOld.isBlank() || cleanNew.isBlank()) return getCustomCategories()
+
+        val isDefaultOrRenamed = defaultCategories.any { it.equals(cleanOld, ignoreCase = true) } ||
+                getCategoryRenames().any { it.key.equals(cleanOld, ignoreCase = true) || it.value.equals(cleanOld, ignoreCase = true) }
+        if (isDefaultOrRenamed) {
+            saveCategoryRename(cleanOld, cleanNew)
+        }
+
         val current = getCustomCategories().toMutableList()
         val idx = current.indexOfFirst { it.equals(cleanOld, ignoreCase = true) }
         if (idx >= 0) {
             current[idx] = cleanNew
             saveCustomCategories(current)
         } else {
-            val isDefault = defaultCategories.any { it.equals(cleanNew, ignoreCase = true) }
+            val isNewDefault = getEffectiveDefaultCategories().any { it.equals(cleanNew, ignoreCase = true) }
             val alreadyExists = current.any { it.equals(cleanNew, ignoreCase = true) }
-            if (!isDefault && !alreadyExists) {
+            if (!isNewDefault && !alreadyExists) {
                 current.add(cleanNew)
                 saveCustomCategories(current)
             }
         }
 
-        val channels = loadCustomChannels().toMutableList()
+        val customChannels = loadCustomChannels().toMutableList()
+        val allChannels = getQuickChannels()
         var changed = false
-        for (i in channels.indices) {
-            val ch = channels[i]
+
+        for (ch in allChannels) {
             if (ch.category.equals(cleanOld, ignoreCase = true)) {
-                channels[i] = ch.copy(category = cleanNew)
+                val updatedCh = ch.copy(category = cleanNew)
+                val cIdx = customChannels.indexOfFirst { it.id == ch.id }
+                if (cIdx >= 0) {
+                    customChannels[cIdx] = updatedCh
+                } else {
+                    customChannels.add(updatedCh)
+                }
                 changed = true
             }
         }
+
         if (changed) {
-            saveCustomChannels(channels)
+            saveCustomChannels(customChannels)
             syncToFirestore()
         }
 
@@ -239,37 +472,15 @@ class FutemaisRepository(context: Context) {
     fun getAllCategories(): List<String> {
         val custom = getCustomCategories()
         val channelCats = getQuickChannels().mapNotNull { it.category }.filter { it.isNotBlank() }
-        return (defaultCategories + custom + channelCats).distinct()
+        return (getEffectiveDefaultCategories() + custom + channelCats).distinct()
     }
 
-    private fun loadCustomChannels(): List<PlayableVideo> {
+    fun loadCustomChannels(): List<PlayableVideo> {
         val jsonStr = prefs.getString("custom_quick_channels", null) ?: return emptyList()
-        return try {
-            val arr = org.json.JSONArray(jsonStr)
-            val list = mutableListOf<PlayableVideo>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                list.add(
-                    PlayableVideo(
-                        id = obj.optString("id", "custom_${System.currentTimeMillis()}"),
-                        title = obj.optString("title"),
-                        subtitle = obj.optString("subtitle", "Canal Personalizado • Admin"),
-                        streamUrl = obj.optString("streamUrl"),
-                        posterUrl = obj.optString("posterUrl").takeIf { it.isNotBlank() },
-                        isLive = obj.optBoolean("isLive", true),
-                        embedUrl = obj.optString("embedUrl").takeIf { it.isNotBlank() },
-                        forceWebPlayer = obj.optBoolean("forceWebPlayer", false),
-                        category = obj.optString("category").takeIf { it.isNotBlank() } ?: "Esportes"
-                    )
-                )
-            }
-            list
-        } catch (e: Exception) {
-            emptyList()
-        }
+        return parseChannelsJson(jsonStr)
     }
 
-    private fun saveCustomChannels(list: List<PlayableVideo>) {
+    private fun saveCustomChannelsInternal(list: List<PlayableVideo>, editor: SharedPreferences.Editor) {
         try {
             val arr = org.json.JSONArray()
             list.forEach { ch ->
@@ -283,11 +494,148 @@ class FutemaisRepository(context: Context) {
                     put("embedUrl", ch.embedUrl ?: "")
                     put("forceWebPlayer", ch.forceWebPlayer)
                     put("category", ch.category ?: "Esportes")
+                    put("isWorking", ch.isWorking)
                 }
                 arr.put(obj)
             }
-            prefs.edit().putString("custom_quick_channels", arr.toString()).apply()
-        } catch (_: Exception) {}
+            editor.putString("custom_quick_channels", arr.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serializing custom channels", e)
+        }
+    }
+
+    private fun saveCustomChannels(list: List<PlayableVideo>) {
+        val editor = prefs.edit()
+        saveCustomChannelsInternal(list, editor)
+        editor.apply()
+    }
+
+    fun toggleChannelWorkingStatus(channelId: String): List<PlayableVideo> {
+        val offline = (prefs.getStringSet("offline_channel_ids", emptySet()) ?: emptySet()).toMutableSet()
+        val willBeWorking = offline.contains(channelId)
+        if (willBeWorking) {
+            offline.remove(channelId)
+        } else {
+            offline.add(channelId)
+        }
+        prefs.edit().putStringSet("offline_channel_ids", offline).apply()
+
+        val custom = loadCustomChannels().toMutableList()
+        val idx = custom.indexOfFirst { it.id == channelId }
+        if (idx >= 0) {
+            custom[idx] = custom[idx].copy(isWorking = willBeWorking)
+            saveCustomChannels(custom)
+        }
+
+        syncToFirestore()
+        return getQuickChannels()
+    }
+
+    fun setChannelWorkingStatus(channelId: String, isWorking: Boolean): List<PlayableVideo> {
+        val offline = (prefs.getStringSet("offline_channel_ids", emptySet()) ?: emptySet()).toMutableSet()
+        if (isWorking) {
+            offline.remove(channelId)
+        } else {
+            offline.add(channelId)
+        }
+        prefs.edit().putStringSet("offline_channel_ids", offline).apply()
+
+        val custom = loadCustomChannels().toMutableList()
+        val idx = custom.indexOfFirst { it.id == channelId }
+        if (idx >= 0) {
+            custom[idx] = custom[idx].copy(isWorking = isWorking)
+            saveCustomChannels(custom)
+        }
+
+        syncToFirestore()
+        return getQuickChannels()
+    }
+
+    suspend fun testSingleChannel(channel: PlayableVideo): Boolean = withContext(Dispatchers.IO) {
+        val targetUrl = channel.streamUrl.ifBlank { channel.embedUrl ?: "" }.trim()
+        if (targetUrl.isBlank() || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+            return@withContext false
+        }
+
+        try {
+            val reqBuilder = Request.Builder()
+                .url(targetUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                .header("Accept", "*/*")
+
+            channel.headers.forEach { (k, v) ->
+                reqBuilder.header(k, v)
+            }
+
+            var response: okhttp3.Response? = null
+            try {
+                // Tenta HEAD request primeiro para economia de dados e velocidade
+                response = channelTestClient.newCall(reqBuilder.head().build()).execute()
+            } catch (_: Exception) {
+                // Tenta fallback GET abaixo
+            }
+
+            if (response == null || response.code == 405 || response.code == 403) {
+                response?.close()
+                // Fallback para GET com range leve
+                val getReq = reqBuilder.get().header("Range", "bytes=0-2048").build()
+                response = channelTestClient.newCall(getReq).execute()
+            }
+
+            response.use { resp ->
+                val code = resp.code
+                if (code in 200..399) {
+                    val contentType = resp.header("Content-Type", "").orEmpty().lowercase()
+                    if (contentType.contains("text/html") && !channel.forceWebPlayer && channel.streamUrl.endsWith(".m3u8", ignoreCase = true)) {
+                        val bodySnippet = try { resp.peekBody(512).string().lowercase() } catch (_: Exception) { "" }
+                        if (bodySnippet.contains("404 not found") || bodySnippet.contains("error 404") || bodySnippet.contains("file not found")) {
+                            return@withContext false
+                        }
+                    }
+                    return@withContext true
+                } else {
+                    return@withContext false
+                }
+            }
+        } catch (_: Exception) {
+            return@withContext false
+        }
+    }
+
+    suspend fun testAllChannels(
+        onProgress: (index: Int, total: Int, channel: PlayableVideo, isWorking: Boolean) -> Unit
+    ): ChannelTestSummary = withContext(Dispatchers.IO) {
+        val currentChannels = getQuickChannels()
+        val total = currentChannels.size
+        var workingCount = 0
+        var offlineCount = 0
+        val offlineList = mutableListOf<PlayableVideo>()
+        val newlyOfflineList = mutableListOf<PlayableVideo>()
+
+        currentChannels.forEachIndexed { index, channel ->
+            val isWorking = testSingleChannel(channel)
+            if (isWorking) {
+                workingCount++
+            } else {
+                offlineCount++
+                offlineList.add(channel.copy(isWorking = false))
+                if (channel.isWorking) {
+                    newlyOfflineList.add(channel.copy(isWorking = false))
+                }
+            }
+
+            setChannelWorkingStatus(channel.id, isWorking)
+            onProgress(index + 1, total, channel, isWorking)
+        }
+
+        ChannelTestSummary(
+            total = total,
+            workingCount = workingCount,
+            offlineCount = offlineCount,
+            newlyOfflineChannels = newlyOfflineList,
+            offlineChannels = offlineList,
+            timestamp = System.currentTimeMillis()
+        )
     }
 
     fun addCustomChannel(channel: PlayableVideo): List<PlayableVideo> {
@@ -360,7 +708,489 @@ class FutemaisRepository(context: Context) {
         }
         prefs.edit().putStringSet("favorite_ids", current).apply()
         _favoriteIds.value = current
+        _mediaCatalogFlow.value = getMediaCatalog()
     }
+
+    // =========================================================================
+    // FILMES & SÉRIES CATALOG MANAGEMENT
+    // =========================================================================
+
+    fun parseMediaCatalogJson(jsonStr: String): List<MediaItem> {
+        if (jsonStr.isBlank() || jsonStr == "[]") return emptyList()
+        return try {
+            val arr = org.json.JSONArray(jsonStr)
+            val list = mutableListOf<MediaItem>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val id = obj.optString("id").takeIf { it.isNotBlank() } ?: "media_${System.currentTimeMillis()}_$i"
+                val title = obj.optString("title", "Sem título")
+                val typeStr = obj.optString("type", "MOVIE")
+                val type = try { MediaContentType.valueOf(typeStr) } catch (_: Exception) { MediaContentType.MOVIE }
+                val coverUrl = obj.optString("coverUrl", "")
+                val backdropUrl = obj.optString("backdropUrl").takeIf { it.isNotBlank() }
+                val synopsis = obj.optString("synopsis", "")
+                val category = obj.optString("category", "Geral")
+                val year = obj.optString("year", "")
+                val rating = obj.optString("rating", "")
+                val movieStreamUrl = obj.optString("movieStreamUrl").takeIf { it.isNotBlank() }
+                val isWebPlayer = obj.optBoolean("isWebPlayer", false)
+                val isWorking = obj.optBoolean("isWorking", true)
+                val createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+
+                val seasonsList = mutableListOf<SeasonItem>()
+                val seasonsArr = obj.optJSONArray("seasons")
+                if (seasonsArr != null) {
+                    for (s in 0 until seasonsArr.length()) {
+                        val sObj = seasonsArr.getJSONObject(s)
+                        val sNumber = sObj.optInt("seasonNumber", s + 1)
+                        val sTitle = sObj.optString("title", "Temporada $sNumber")
+                        val epsList = mutableListOf<EpisodeItem>()
+                        val epsArr = sObj.optJSONArray("episodes")
+                        if (epsArr != null) {
+                            for (e in 0 until epsArr.length()) {
+                                val eObj = epsArr.getJSONObject(e)
+                                val eId = eObj.optString("id", "${id}_s${sNumber}_e${e + 1}")
+                                val eNumber = eObj.optInt("episodeNumber", e + 1)
+                                val eTitle = eObj.optString("title", "Episódio $eNumber")
+                                val eUrl = eObj.optString("streamUrl", "")
+                                val eWeb = eObj.optBoolean("isWebPlayer", false)
+                                val eDur = eObj.optString("duration").takeIf { it.isNotBlank() }
+                                val eSyn = eObj.optString("synopsis").takeIf { it.isNotBlank() }
+                                epsList.add(
+                                    EpisodeItem(
+                                        id = eId,
+                                        episodeNumber = eNumber,
+                                        title = eTitle,
+                                        streamUrl = eUrl,
+                                        isWebPlayer = eWeb,
+                                        duration = eDur,
+                                        synopsis = eSyn
+                                    )
+                                )
+                            }
+                        }
+                        seasonsList.add(SeasonItem(seasonNumber = sNumber, title = sTitle, episodes = epsList))
+                    }
+                }
+
+                list.add(
+                    MediaItem(
+                        id = id,
+                        title = title,
+                        type = type,
+                        coverUrl = coverUrl,
+                        backdropUrl = backdropUrl,
+                        synopsis = synopsis,
+                        category = category,
+                        year = year,
+                        rating = rating,
+                        movieStreamUrl = movieStreamUrl,
+                        isWebPlayer = isWebPlayer,
+                        seasons = seasonsList,
+                        isWorking = isWorking,
+                        createdAt = createdAt
+                    )
+                )
+            }
+            list
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing media catalog JSON", e)
+            emptyList()
+        }
+    }
+
+    fun serializeMediaCatalog(list: List<MediaItem>): String {
+        return try {
+            val arr = org.json.JSONArray()
+            list.forEach { item ->
+                val obj = org.json.JSONObject().apply {
+                    put("id", item.id)
+                    put("title", item.title)
+                    put("type", item.type.name)
+                    put("coverUrl", item.coverUrl)
+                    put("backdropUrl", item.backdropUrl ?: "")
+                    put("synopsis", item.synopsis)
+                    put("category", item.category)
+                    put("year", item.year)
+                    put("rating", item.rating)
+                    put("movieStreamUrl", item.movieStreamUrl ?: "")
+                    put("isWebPlayer", item.isWebPlayer)
+                    put("isWorking", item.isWorking)
+                    put("createdAt", item.createdAt)
+
+                    val sArr = org.json.JSONArray()
+                    item.seasons.forEach { season ->
+                        val sObj = org.json.JSONObject().apply {
+                            put("seasonNumber", season.seasonNumber)
+                            put("title", season.title)
+                            val eArr = org.json.JSONArray()
+                            season.episodes.forEach { ep ->
+                                val eObj = org.json.JSONObject().apply {
+                                    put("id", ep.id)
+                                    put("episodeNumber", ep.episodeNumber)
+                                    put("title", ep.title)
+                                    put("streamUrl", ep.streamUrl)
+                                    put("isWebPlayer", ep.isWebPlayer)
+                                    put("duration", ep.duration ?: "")
+                                    put("synopsis", ep.synopsis ?: "")
+                                }
+                                eArr.put(eObj)
+                            }
+                            put("episodes", eArr)
+                        }
+                        sArr.put(sObj)
+                    }
+                    put("seasons", sArr)
+                }
+                arr.put(obj)
+            }
+            arr.toString()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error serializing media catalog", e)
+            "[]"
+        }
+    }
+
+    fun getDefaultMediaCatalog(): List<MediaItem> {
+        return listOf(
+            MediaItem(
+                id = "movie_oppenheimer",
+                title = "Oppenheimer",
+                type = MediaContentType.MOVIE,
+                coverUrl = "https://image.tmdb.org/t/p/w500/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg",
+                backdropUrl = "https://image.tmdb.org/t/p/w780/fm6KqXpk3M2HVveHwCrBSSBaO0V.jpg",
+                synopsis = "A fascinante história do físico J. Robert Oppenheimer, seu papel central no Projeto Manhattan e o desenvolvimento da bomba atômica durante a Segunda Guerra Mundial.",
+                category = "Drama / História",
+                year = "2023",
+                rating = "8.9",
+                movieStreamUrl = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
+                isWebPlayer = false
+            ),
+            MediaItem(
+                id = "movie_interstellar",
+                title = "Interestelar",
+                type = MediaContentType.MOVIE,
+                coverUrl = "https://image.tmdb.org/t/p/w500/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg",
+                backdropUrl = "https://image.tmdb.org/t/p/w780/rAiYTPIENuFaYYahM2sQ875MkWk.jpg",
+                synopsis = "Uma equipe de bravos exploradores viaja através de um buraco de minhoca no espaço profundo em uma corrida contra o tempo para garantir a sobrevivência da raça humana.",
+                category = "Ficção Científica",
+                year = "2014",
+                rating = "8.7",
+                movieStreamUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                isWebPlayer = false
+            ),
+            MediaItem(
+                id = "movie_avengers_endgame",
+                title = "Vingadores: Ultimato",
+                type = MediaContentType.MOVIE,
+                coverUrl = "https://image.tmdb.org/t/p/w500/or06FN3Dka5tukK1e9sl16pB3iy.jpg",
+                backdropUrl = "https://image.tmdb.org/t/p/w780/7RyHsO4yDXtBv1zUU3mTpHeQ0d5.jpg",
+                synopsis = "Após o estalar de dedos devastador de Thanos, os heróis sobreviventes se reúnem mais uma vez para desfazer o caos e restaurar o equilíbrio em todo o universo.",
+                category = "Ação / Aventura",
+                year = "2019",
+                rating = "8.4",
+                movieStreamUrl = "https://bitmovin-a.akamaihd.net/content/MI201109210084_1/m3u8s/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8",
+                isWebPlayer = false
+            ),
+            MediaItem(
+                id = "movie_spider_verse",
+                title = "Homem-Aranha: Através do Aranhaverso",
+                type = MediaContentType.MOVIE,
+                coverUrl = "https://image.tmdb.org/t/p/w500/8Vt6mWEReuy4Of61Lnj5Xj704m8.jpg",
+                backdropUrl = "https://image.tmdb.org/t/p/w780/4HodYYKEIsGOdinkGi2Ucz6X9i0.jpg",
+                synopsis = "Miles Morales é arremessado através do multiverso, unindo forças com Gwen Stacy e uma equipe de heróis-aranha para enfrentar uma ameaça colossal.",
+                category = "Animação",
+                year = "2023",
+                rating = "8.8",
+                movieStreamUrl = "https://bitmovin-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+                isWebPlayer = false
+            ),
+            MediaItem(
+                id = "series_stranger_things",
+                title = "Stranger Things",
+                type = MediaContentType.SERIES,
+                coverUrl = "https://image.tmdb.org/t/p/w500/49WJfeN0moxb9IPfGn8AIqMGskD.jpg",
+                backdropUrl = "https://image.tmdb.org/t/p/w780/56v2KjBlU4XaOv9rVYEQypROD7P.jpg",
+                synopsis = "Quando um jovem garoto desaparece repentinamente, uma pequena cidade descobre mistérios paranormais, experimentos governamentais ultrassecretos e uma jovem extraordinária chamada Eleven.",
+                category = "Suspense / Ficção",
+                year = "2016",
+                rating = "8.7",
+                seasons = listOf(
+                    SeasonItem(
+                        seasonNumber = 1,
+                        title = "1ª Temporada",
+                        episodes = listOf(
+                            EpisodeItem(
+                                id = "st_s1_e1",
+                                episodeNumber = 1,
+                                title = "Capítulo Um: O Desaparecimento de Will Byers",
+                                streamUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                                duration = "48m",
+                                synopsis = "No caminho para casa depois de um jogo de RPG com os amigos, o jovem Will vê algo aterrorizante."
+                            ),
+                            EpisodeItem(
+                                id = "st_s1_e2",
+                                episodeNumber = 2,
+                                title = "Capítulo Dois: A Estranha da Rua Maple",
+                                streamUrl = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
+                                duration = "55m",
+                                synopsis = "Lucas, Mike e Dustin tentam conversar com a garota que encontraram na floresta."
+                            ),
+                            EpisodeItem(
+                                id = "st_s1_e3",
+                                episodeNumber = 3,
+                                title = "Capítulo Três: Caramanchão",
+                                streamUrl = "https://bitmovin-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+                                duration = "51m",
+                                synopsis = "Joyce se recusa a acreditar que Will se foi e tenta se comunicar com ele por meio de luzes de Natal."
+                            ),
+                            EpisodeItem(
+                                id = "st_s1_e4",
+                                episodeNumber = 4,
+                                title = "Capítulo Quatro: O Corpo",
+                                streamUrl = "https://bitmovin-a.akamaihd.net/content/MI201109210084_1/m3u8s/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8",
+                                duration = "50m",
+                                synopsis = "Os meninos transformam Eleven para que ela se pareça com uma garota normal e use o rádio da escola."
+                            )
+                        )
+                    ),
+                    SeasonItem(
+                        seasonNumber = 2,
+                        title = "2ª Temporada",
+                        episodes = listOf(
+                            EpisodeItem(
+                                id = "st_s2_e1",
+                                episodeNumber = 1,
+                                title = "Capítulo Um: MADMAX",
+                                streamUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                                duration = "48m",
+                                synopsis = "Com a chegada do Halloween, uma nova garota na escola atrai a atenção dos meninos."
+                            ),
+                            EpisodeItem(
+                                id = "st_s2_e2",
+                                episodeNumber = 2,
+                                title = "Capítulo Dois: Gostosuras ou Travessuras, Aberração",
+                                streamUrl = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
+                                duration = "56m",
+                                synopsis = "Will tem uma visão perturbadora na noite de Halloween e Dustin encontra um animal de estimação incomum."
+                            )
+                        )
+                    )
+                )
+            ),
+            MediaItem(
+                id = "series_breaking_bad",
+                title = "Breaking Bad",
+                type = MediaContentType.SERIES,
+                coverUrl = "https://image.tmdb.org/t/p/w500/ggFHVNu6YYI5L9pCfOacjizRGt.jpg",
+                backdropUrl = "https://image.tmdb.org/t/p/w780/tsRy63Mu5cu8etL1X7ZLyf7UP1M.jpg",
+                synopsis = "Walter White, um professor de química do ensino médio diagnosticado com câncer de pulmão em estágio terminal, decide produzir metanfetamina de alta pureza com seu ex-aluno Jesse Pinkman.",
+                category = "Drama / Policial",
+                year = "2008",
+                rating = "9.5",
+                seasons = listOf(
+                    SeasonItem(
+                        seasonNumber = 1,
+                        title = "1ª Temporada",
+                        episodes = listOf(
+                            EpisodeItem(
+                                id = "bb_s1_e1",
+                                episodeNumber = 1,
+                                title = "Piloto",
+                                streamUrl = "https://bitmovin-a.akamaihd.net/content/MI201109210084_1/m3u8s/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8",
+                                duration = "58m",
+                                synopsis = "Diagnosticado com câncer terminal, Walter White decide entrar no negócio do tráfico de drogas."
+                            ),
+                            EpisodeItem(
+                                id = "bb_s1_e2",
+                                episodeNumber = 2,
+                                title = "O Gato no Saco...",
+                                streamUrl = "https://bitmovin-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+                                duration = "48m",
+                                synopsis = "Walt e Jesse tentam lidar com as consequências de sua primeira experiência de cozimento no deserto."
+                            ),
+                            EpisodeItem(
+                                id = "bb_s1_e3",
+                                episodeNumber = 3,
+                                title = "...E o Saco no Rio",
+                                streamUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                                duration = "48m",
+                                synopsis = "Walt trava uma batalha moral com a difícil decisão que precisa tomar no porão de Jesse."
+                            )
+                        )
+                    )
+                )
+            ),
+            MediaItem(
+                id = "series_the_last_of_us",
+                title = "The Last of Us",
+                type = MediaContentType.SERIES,
+                coverUrl = "https://image.tmdb.org/t/p/w500/uKvVjHNqB5VmOrdxqAt2V7JMrHG.jpg",
+                backdropUrl = "https://image.tmdb.org/t/p/w780/uDgy6hyPd82kOHh6I95FLtLnj6p.jpg",
+                synopsis = "Vinte anos após uma pandemia fúngica devastar a civilização moderna, Joel, um sobrevivente endurecido, é contratado para contrabandear Ellie, uma jovem de 14 anos, para fora de uma zona de quarentena opressiva.",
+                category = "Ação / Ficção",
+                year = "2023",
+                rating = "8.8",
+                seasons = listOf(
+                    SeasonItem(
+                        seasonNumber = 1,
+                        title = "1ª Temporada",
+                        episodes = listOf(
+                            EpisodeItem(
+                                id = "tlou_s1_e1",
+                                episodeNumber = 1,
+                                title = "Quando Estiver Perdido na Escuridão",
+                                streamUrl = "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
+                                duration = "1h 21m",
+                                synopsis = "Vinte anos após um surto fúngico arrasar o planeta, os sobreviventes Joel e Tess são encarregados de uma missão que pode mudar o mundo."
+                            ),
+                            EpisodeItem(
+                                id = "tlou_s1_e2",
+                                episodeNumber = 2,
+                                title = "Infectados",
+                                streamUrl = "https://bitmovin-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+                                duration = "53m",
+                                synopsis = "Joel e Tess navegam por uma Boston abandonada e inundada com Ellie para escoltá-la ao ponto de encontro dos Vaga-Lumes."
+                            ),
+                            EpisodeItem(
+                                id = "tlou_s1_e3",
+                                episodeNumber = 3,
+                                title = "Muito, Muito Tempo",
+                                streamUrl = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                                duration = "1h 15m",
+                                synopsis = "Quando um estranho se aproxima do seu complexo fortificado, o sobrevivente Bill forja uma conexão improvável com Frank."
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    }
+
+    fun loadCustomMediaCatalog(): List<MediaItem> {
+        val jsonStr = prefs.getString("custom_media_catalog", null) ?: return emptyList()
+        return parseMediaCatalogJson(jsonStr)
+    }
+
+    private fun saveCustomMediaCatalog(list: List<MediaItem>) {
+        val jsonStr = serializeMediaCatalog(list)
+        prefs.edit().putString("custom_media_catalog", jsonStr).apply()
+        _mediaCatalogFlow.value = getMediaCatalog()
+    }
+
+    fun getMediaCatalog(): List<MediaItem> {
+        val custom = loadCustomMediaCatalog()
+        val deleted = prefs.getStringSet("deleted_media_ids", emptySet()) ?: emptySet()
+        val customIds = custom.map { it.id }.toSet()
+        val defaultList = getDefaultMediaCatalog()
+        val activeDefaults = defaultList.filter { !customIds.contains(it.id) && !deleted.contains(it.id) }
+        val allMedia = custom.filter { !deleted.contains(it.id) } + activeDefaults
+        val favs = _favoriteIds.value
+        return allMedia.map { item ->
+            item.copy(isFavorite = favs.contains(item.id))
+        }
+    }
+
+    fun addOrUpdateMediaItem(item: MediaItem): List<MediaItem> {
+        val custom = loadCustomMediaCatalog().toMutableList()
+        val idx = custom.indexOfFirst { it.id == item.id }
+        if (idx >= 0) {
+            custom[idx] = item
+        } else {
+            custom.add(0, item)
+        }
+        saveCustomMediaCatalog(custom)
+
+        val deleted = (prefs.getStringSet("deleted_media_ids", emptySet()) ?: emptySet()).toMutableSet()
+        if (deleted.contains(item.id)) {
+            deleted.remove(item.id)
+            prefs.edit().putStringSet("deleted_media_ids", deleted).apply()
+        }
+
+        syncMediaToFirestore()
+        val catalog = getMediaCatalog()
+        _mediaCatalogFlow.value = catalog
+        return catalog
+    }
+
+    fun deleteMediaItem(id: String): List<MediaItem> {
+        val custom = loadCustomMediaCatalog().toMutableList()
+        custom.removeAll { it.id == id }
+        saveCustomMediaCatalog(custom)
+
+        val deleted = (prefs.getStringSet("deleted_media_ids", emptySet()) ?: emptySet()).toMutableSet()
+        deleted.add(id)
+        prefs.edit().putStringSet("deleted_media_ids", deleted).apply()
+
+        syncMediaToFirestore()
+        val catalog = getMediaCatalog()
+        _mediaCatalogFlow.value = catalog
+        return catalog
+    }
+
+    fun toggleMediaFavorite(id: String): List<MediaItem> {
+        toggleFavorite(id)
+        val catalog = getMediaCatalog()
+        _mediaCatalogFlow.value = catalog
+        return catalog
+    }
+
+    private fun syncMediaFromFirestore(onComplete: () -> Unit = {}) {
+        mediaListenerRegistration?.remove()
+        mediaListenerRegistration = firestore?.collection("app_data")?.document("media_catalog")
+            ?.addSnapshotListener { doc, error ->
+                if (error != null) {
+                    Log.w(TAG, "Notice: could not sync media catalog from Firestore (${error.message ?: "client offline"})")
+                    onComplete()
+                    return@addSnapshotListener
+                }
+
+                if (doc != null && doc.exists()) {
+                    val remoteMediaJson = doc.getString("media_catalog_json")
+                    val deletedIds = (doc.get("deleted_media_ids") as? List<*>)?.mapNotNull { it?.toString() }?.toSet() ?: emptySet()
+
+                    val editor = prefs.edit()
+                    if (deletedIds.isNotEmpty()) {
+                        editor.putStringSet("deleted_media_ids", deletedIds)
+                    }
+
+                    if (!remoteMediaJson.isNullOrBlank()) {
+                        val remoteList = parseMediaCatalogJson(remoteMediaJson)
+                        val localList = loadCustomMediaCatalog()
+                        val currentDeleted = (prefs.getStringSet("deleted_media_ids", emptySet()) ?: emptySet()) + deletedIds
+
+                        val map = mutableMapOf<String, MediaItem>()
+                        localList.forEach { if (!currentDeleted.contains(it.id)) map[it.id] = it }
+                        remoteList.forEach { if (!currentDeleted.contains(it.id)) map[it.id] = it }
+
+                        val mergedList = map.values.toList()
+                        editor.putString("custom_media_catalog", serializeMediaCatalog(mergedList))
+                    }
+
+                    editor.apply()
+                    _mediaCatalogFlow.value = getMediaCatalog()
+                }
+                onComplete()
+            }
+    }
+
+    private fun syncMediaToFirestore() {
+        val customMedia = prefs.getString("custom_media_catalog", "[]") ?: "[]"
+        val deletedIds = prefs.getStringSet("deleted_media_ids", emptySet())?.toList() ?: emptyList()
+
+        val data = hashMapOf(
+            "media_catalog_json" to customMedia,
+            "deleted_media_ids" to deletedIds,
+            "last_updated" to System.currentTimeMillis()
+        )
+
+        firestore?.collection("app_data")?.document("media_catalog")
+            ?.set(data, com.google.firebase.firestore.SetOptions.merge())
+            ?.addOnFailureListener { e ->
+                Log.e(TAG, "Error saving media catalog to Firestore", e)
+            }
+    }
+
 
     suspend fun fetchMatches(url: String = "https://futemais.link/app2/"): Result<List<MatchItem>> =
         withContext(Dispatchers.IO) {
@@ -717,7 +1547,7 @@ class FutemaisRepository(context: Context) {
                 id = "canal_cxtv_seculo21",
                 title = "TV Século 21 HD",
                 subtitle = "Associação do Senhor Jesus e Novenas • CXTV",
-                streamUrl = "http://tvseculo21-lh.akamaihd.net/i/tvseculo_1@16110/master.m3u8",
+                streamUrl = "https://cdn.jmvstream.com/w/LVW-10874/LVW10874_Xg72X/playlist.m3u8",
                 embedUrl = null,
                 isLive = true,
                 category = "Católicos (CXTV)"
@@ -726,7 +1556,7 @@ class FutemaisRepository(context: Context) {
                 id = "canal_cxtv_paieterno",
                 title = "TV Pai Eterno HD",
                 subtitle = "Santuário Basílica do Divino Pai Eterno • CXTV",
-                streamUrl = "http://flash8.crossdigital.com.br/2306/2306/chunklist.m3u8",
+                streamUrl = "https://cdn.jmvstream.com/w/LVW-10313/LVW10313_live/playlist.m3u8",
                 embedUrl = null,
                 isLive = true,
                 category = "Católicos (CXTV)"
@@ -735,7 +1565,7 @@ class FutemaisRepository(context: Context) {
                 id = "canal_cxtv_nazare",
                 title = "TV Nazaré HD",
                 subtitle = "Arquidiocese de Belém e Fé Católica • CXTV",
-                streamUrl = "https://5c65286fc6ace.streamlock.net/cancaonova/CancaoNova.stream_720p/playlist.m3u8",
+                streamUrl = "https://cdn.jmvstream.com/w/LVW-8149/LVW8149_4g/playlist.m3u8",
                 embedUrl = null,
                 isLive = true,
                 category = "Católicos (CXTV)"
@@ -748,6 +1578,86 @@ class FutemaisRepository(context: Context) {
                 subtitle = "Filmes Clássicos, Sucessos de Hollywood e Cinema 24h",
                 streamUrl = "https://spt-sonyoneclassicas-1-br.samsung.wurl.tv/playlist.m3u8",
                 embedUrl = null,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_warnertv",
+                title = "Warner TV HD",
+                subtitle = "Séries, Filmes e Entretenimento 24h • Web Player",
+                streamUrl = "https://tv.embedtv.lat/warnertv",
+                embedUrl = "https://tv.embedtv.lat/warnertv",
+                forceWebPlayer = true,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_tnt",
+                title = "TNT HD",
+                subtitle = "Filmes, Eventos e Entretenimento 24h • Web Player",
+                streamUrl = "https://tv.embedtv.lat/tnt",
+                embedUrl = "https://tv.embedtv.lat/tnt",
+                forceWebPlayer = true,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_space",
+                title = "Space HD",
+                subtitle = "Filmes de Ação, Ficção e Terror 24h • Web Player",
+                streamUrl = "https://tv.embedtv.lat/space",
+                embedUrl = "https://tv.embedtv.lat/space",
+                forceWebPlayer = true,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_megapix",
+                title = "Megapix HD",
+                subtitle = "Sucessos do Cinema Dublados 24h • Web Player",
+                streamUrl = "https://tv.embedtv.lat/megapix",
+                embedUrl = "https://tv.embedtv.lat/megapix",
+                forceWebPlayer = true,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_telecine_pipoca",
+                title = "Telecine Pipoca HD",
+                subtitle = "Filmes Dublados e Sucessos de Bilheteria • Web Player",
+                streamUrl = "https://tv.embedtv.lat/telecinepipoca",
+                embedUrl = "https://tv.embedtv.lat/telecinepipoca",
+                forceWebPlayer = true,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_hbo",
+                title = "HBO HD",
+                subtitle = "Séries Exclusivas, Filmes e Lançamentos • Web Player",
+                streamUrl = "https://tv.embedtv.lat/hbo",
+                embedUrl = "https://tv.embedtv.lat/hbo",
+                forceWebPlayer = true,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_universal_tv",
+                title = "Universal TV HD",
+                subtitle = "Séries Policiais, Ação e Filmes • Web Player",
+                streamUrl = "https://tv.embedtv.lat/universaltv",
+                embedUrl = "https://tv.embedtv.lat/universaltv",
+                forceWebPlayer = true,
+                isLive = true,
+                category = "Filmes & Séries"
+            ),
+            PlayableVideo(
+                id = "canal_discovery_channel",
+                title = "Discovery Channel HD",
+                subtitle = "Documentários, Ciência e Natureza • Web Player",
+                streamUrl = "https://tv.embedtv.lat/discoverychannel",
+                embedUrl = "https://tv.embedtv.lat/discoverychannel",
+                forceWebPlayer = true,
                 isLive = true,
                 category = "Filmes & Séries"
             ),
@@ -774,8 +1684,8 @@ class FutemaisRepository(context: Context) {
                 id = "canal_cartoonito",
                 title = "Cartoonito HD",
                 subtitle = "Desenhos e Programação Pré-escolar Infantil 24h • Web Player",
-                streamUrl = "https://redecanaistv.pk/player3/ch.php?categoria=live&canal=cantoonito",
-                embedUrl = "https://redecanaistv.pk/player3/ch.php?categoria=live&canal=cantoonito",
+                streamUrl = "https://tv.embedtv.lat/cartoonito",
+                embedUrl = "https://tv.embedtv.lat/cartoonito",
                 forceWebPlayer = true,
                 isLive = true,
                 category = "Desenhos & Kids"
@@ -922,9 +1832,19 @@ class FutemaisRepository(context: Context) {
         val custom = loadCustomChannels()
         val deleted = prefs.getStringSet("deleted_channel_ids", emptySet()) ?: emptySet()
         val customIds = custom.map { it.id }.toSet()
-        val defaultChannels = getDefaultChannels()
+        val renames = getCategoryRenames()
+        val defaultChannels = getDefaultChannels().map { ch ->
+            val mappedCat = renames[ch.category]
+            if (mappedCat != null) ch.copy(category = mappedCat) else ch
+        }
         val activeDefaults = defaultChannels.filter { !customIds.contains(it.id) && !deleted.contains(it.id) }
-        return custom.filter { !deleted.contains(it.id) } + activeDefaults
+        val allChannels = custom.filter { !deleted.contains(it.id) } + activeDefaults
+        val favs = _favoriteIds.value
+        val offline = prefs.getStringSet("offline_channel_ids", emptySet()) ?: emptySet()
+        return allChannels.map { ch ->
+            val working = if (offline.contains(ch.id)) false else ch.isWorking
+            ch.copy(isFavorite = favs.contains(ch.id), isWorking = working)
+        }
     }
 
     private fun getDefaultChannelOptions(detailUrl: String): List<ChannelOption> {

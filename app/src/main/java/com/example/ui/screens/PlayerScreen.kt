@@ -19,6 +19,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -138,6 +139,7 @@ fun PlayerScreen(
     onBack: () -> Unit,
     onCastToggle: () -> Unit,
     onDisconnectCast: () -> Unit,
+    onPlaybackError: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -207,27 +209,35 @@ fun PlayerScreen(
     val exoPlayer = remember(video.streamUrl, useWebviewPlayer) {
         if (useWebviewPlayer || !hasDirectMediaUrl) null
         else {
-            val userAgent = video.headers["User-Agent"]
-                ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            val defaultUserAgent = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+            val userAgent = video.headers["User-Agent"] ?: defaultUserAgent
 
             val httpDataSourceFactory = DefaultHttpDataSource.Factory()
                 .setUserAgent(userAgent)
                 .setAllowCrossProtocolRedirects(true)
+                .setKeepPostFor302Redirects(true)
                 .setConnectTimeoutMs(25000)
                 .setReadTimeoutMs(25000)
 
             val headerMap = mutableMapOf<String, String>()
             headerMap["User-Agent"] = userAgent
             headerMap["Accept"] = "*/*"
+            headerMap["Accept-Language"] = "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+            headerMap["Sec-Fetch-Mode"] = "cors"
+            headerMap["Sec-Fetch-Site"] = "cross-site"
+            headerMap["Sec-Fetch-Dest"] = "video"
+
             video.headers.forEach { (k, v) ->
                 headerMap[k] = v
             }
             // Only add Referer if explicitly specified in headers, or if streamUrl and embedUrl share the same host
-            if (!headerMap.containsKey("Referer") && !video.embedUrl.isNullOrBlank()) {
-                val streamHost = try { Uri.parse(video.streamUrl).host } catch (_: Exception) { null }
-                val embedHost = try { Uri.parse(video.embedUrl).host } catch (_: Exception) { null }
-                if (streamHost != null && embedHost != null && streamHost.equals(embedHost, ignoreCase = true)) {
-                    headerMap["Referer"] = video.embedUrl
+            if (!headerMap.containsKey("Referer")) {
+                if (!video.embedUrl.isNullOrBlank()) {
+                    val streamHost = try { Uri.parse(video.streamUrl).host } catch (_: Exception) { null }
+                    val embedHost = try { Uri.parse(video.embedUrl).host } catch (_: Exception) { null }
+                    if (streamHost != null && embedHost != null && streamHost.equals(embedHost, ignoreCase = true)) {
+                        headerMap["Referer"] = video.embedUrl
+                    }
                 }
             }
             httpDataSourceFactory.setDefaultRequestProperties(headerMap)
@@ -296,8 +306,17 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                errorMessage = "Erro de reprodução: ${error.localizedMessage ?: "Verifique a conexão"}"
+                val rawMsg = error.localizedMessage ?: ""
+                val is403 = rawMsg.contains("403") || error.errorCodeName.contains("403") || error.cause?.message?.contains("403") == true
+                val is404 = rawMsg.contains("404") || error.cause?.message?.contains("404") == true
+                
+                errorMessage = when {
+                    is403 -> "Servidor bloqueou requisição direta (Erro 403). Alterne para o Player Web ou use o transmissor."
+                    is404 -> "Transmissão ou arquivo não encontrado (Erro 404). Link indisponível no momento."
+                    else -> "Erro de reprodução: ${error.localizedMessage ?: "Verifique a conexão com a internet"}"
+                }
                 isBuffering = false
+                onPlaybackError(video.id)
             }
         }
 
@@ -361,7 +380,7 @@ fun PlayerScreen(
                                 )
                                 setBackgroundColor(android.graphics.Color.BLACK)
                                 try {
-                                    setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                    setLayerType(android.view.View.LAYER_TYPE_NONE, null)
                                 } catch (_: Exception) {}
 
                                 settings.javaScriptEnabled = true
@@ -371,8 +390,8 @@ fun PlayerScreen(
                                 settings.mediaPlaybackRequiresUserGesture = false
                                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                                 settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                                settings.setSupportMultipleWindows(true)
-                                settings.setJavaScriptCanOpenWindowsAutomatically(true)
+                                settings.setSupportMultipleWindows(false)
+                                settings.setJavaScriptCanOpenWindowsAutomatically(false)
                                 settings.loadWithOverviewMode = true
                                 settings.useWideViewPort = true
                                 settings.allowContentAccess = true
@@ -386,7 +405,19 @@ fun PlayerScreen(
                                     android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                                 } catch (_: Exception) {}
 
-                                webChromeClient = WebChromeClient()
+                                webChromeClient = object : WebChromeClient() {
+                                    override fun onCreateWindow(
+                                        view: WebView?,
+                                        isDialog: Boolean,
+                                        isUserGesture: Boolean,
+                                        resultMsg: android.os.Message?
+                                    ): Boolean {
+                                        val transport = resultMsg?.obj as? WebView.WebViewTransport
+                                        transport?.webView = view
+                                        resultMsg?.sendToTarget()
+                                        return true
+                                    }
+                                }
                                 webViewClient = object : WebViewClient() {
                                     override fun shouldOverrideUrlLoading(
                                         view: WebView?,
@@ -394,7 +425,7 @@ fun PlayerScreen(
                                     ): Boolean {
                                         val reqUrl = request?.url?.toString() ?: return false
                                         // Block intrusive redirects and store schemes
-                                        if (reqUrl.startsWith("intent:") || reqUrl.startsWith("market:") || reqUrl.startsWith("whatsapp:") || reqUrl.startsWith("tg:")) {
+                                        if (reqUrl.startsWith("intent:") || reqUrl.startsWith("market:") || reqUrl.startsWith("whatsapp:") || reqUrl.startsWith("tg:") || reqUrl.startsWith("mailto:") || reqUrl.startsWith("tel:")) {
                                             return true
                                         }
                                         return false
@@ -409,6 +440,14 @@ fun PlayerScreen(
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
                                         isWebViewLoading = false
+                                        try {
+                                            view?.evaluateJavascript("""
+                                                (function() {
+                                                    var playBtns = document.querySelectorAll('.play-btn, .vjs-big-play-button, #play-button, .jw-display-icon-container, [aria-label="Play"], .plyr__control--overlaid');
+                                                    playBtns.forEach(function(btn) { try { btn.click(); } catch(e){} });
+                                                })();
+                                            """.trimIndent(), null)
+                                        } catch (_: Exception) {}
                                     }
 
                                     override fun onReceivedError(
@@ -447,9 +486,12 @@ fun PlayerScreen(
                                     targetStream.contains(".mp4", ignoreCase = true) ||
                                     targetStream.contains(".ts", ignoreCase = true)
                                 ) && !isFutemais
+                                val isHttpUrl = targetStream.startsWith("http://", ignoreCase = true) || targetStream.startsWith("https://", ignoreCase = true)
 
                                 if (isFutemais) {
-                                    loadUrl(targetStream, mapOf("Referer" to "https://futemais.link/"))
+                                    val headers = mutableMapOf("Referer" to "https://futemais.link/")
+                                    video.headers?.let { headers.putAll(it) }
+                                    loadUrl(targetStream, headers)
                                 } else if (isDirectMedia) {
                                     val htmlData = """
                                         <!DOCTYPE html>
@@ -502,26 +544,34 @@ fun PlayerScreen(
                                         </body>
                                         </html>
                                     """.trimIndent()
-                                    loadDataWithBaseURL("https://autoembed.co", htmlData, "text/html", "UTF-8", null)
+                                    loadDataWithBaseURL(targetStream, htmlData, "text/html", "UTF-8", null)
+                                } else if (isHttpUrl) {
+                                    val headers = mutableMapOf<String, String>()
+                                    video.headers?.let { headers.putAll(it) }
+                                    if (headers.isNotEmpty()) {
+                                        loadUrl(targetStream, headers)
+                                    } else {
+                                        loadUrl(targetStream)
+                                    }
                                 } else {
-                                                                         val iframeHtml = """
-                                         <!DOCTYPE html>
-                                         <html>
-                                         <head>
-                                             <meta charset="utf-8">
-                                             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                                             <style>
-                                                 * { box-sizing: border-box; margin: 0; padding: 0; }
-                                                 html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; }
-                                                 iframe { width: 100%; height: 100%; border: none; background: #000; }
-                                             </style>
-                                         </head>
-                                         <body>
-                                             <iframe src="$targetStream" allowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
-                                         </body>
-                                         </html>
-                                     """.trimIndent()
-                                     loadDataWithBaseURL("https://autoembed.co", iframeHtml, "text/html", "UTF-8", null)
+                                    val iframeHtml = """
+                                        <!DOCTYPE html>
+                                        <html>
+                                        <head>
+                                            <meta charset="utf-8">
+                                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                                            <style>
+                                                * { box-sizing: border-box; margin: 0; padding: 0; }
+                                                html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+                                                iframe { width: 100%; height: 100%; border: none; background: #000; }
+                                            </style>
+                                        </head>
+                                        <body>
+                                            <iframe src="$targetStream" allowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
+                                        </body>
+                                        </html>
+                                    """.trimIndent()
+                                    loadDataWithBaseURL(targetStream, iframeHtml, "text/html", "UTF-8", null)
                                 }
                             }.also { webViewInstance = it }
                         },
@@ -839,7 +889,10 @@ fun PlayerScreen(
                                 maxLines = 3
                             )
                             Spacer(modifier = Modifier.height(16.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Button(
                                     onClick = {
                                         errorMessage = null
@@ -848,19 +901,22 @@ fun PlayerScreen(
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary)
                                 ) {
-                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                    Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.Black)
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Tentar Novamente", color = Color.Black)
+                                    Text("Tentar Novamente", color = Color.Black, fontWeight = FontWeight.Bold)
                                 }
 
-                                if (!video.embedUrl.isNullOrBlank()) {
-                                    OutlinedButton(
-                                        onClick = { useWebviewPlayer = true }
-                                    ) {
-                                        Icon(Icons.Default.Language, contentDescription = null)
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Abrir no Player Web")
-                                    }
+                                OutlinedButton(
+                                    onClick = { 
+                                        errorMessage = null
+                                        useWebviewPlayer = true 
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = StadiumGreenPrimary),
+                                    border = BorderStroke(1.dp, StadiumGreenPrimary)
+                                ) {
+                                    Icon(Icons.Default.Language, contentDescription = null, tint = StadiumGreenPrimary)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Player Web", color = StadiumGreenPrimary, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }

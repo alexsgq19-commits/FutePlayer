@@ -38,7 +38,8 @@ data class PlayableVideo(
     val embedUrl: String? = null,
     val isFavorite: Boolean = false,
     val forceWebPlayer: Boolean = false,
-    val category: String? = null
+    val category: String? = null,
+    val isWorking: Boolean = true
 )
 
 enum class StreamFormat {
@@ -46,4 +47,58 @@ enum class StreamFormat {
     MP4,
     DASH_MPD,
     WEB_EMBED
+}
+
+data class ChannelTestSummary(
+    val total: Int = 0,
+    val workingCount: Int = 0,
+    val offlineCount: Int = 0,
+    val newlyOfflineChannels: List<PlayableVideo> = emptyList(),
+    val offlineChannels: List<PlayableVideo> = emptyList(),
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+enum class MediaContentType {
+    MOVIE,
+    SERIES
+}
+
+data class EpisodeItem(
+    val id: String = "",
+    val episodeNumber: Int = 1,
+    val title: String = "",
+    val streamUrl: String = "",
+    val isWebPlayer: Boolean = false,
+    val duration: String? = null,
+    val synopsis: String? = null
+)
+
+data class SeasonItem(
+    val seasonNumber: Int = 1,
+    val title: String = "Temporada $seasonNumber",
+    val episodes: List<EpisodeItem> = emptyList()
+)
+
+data class MediaItem(
+    val id: String,
+    val title: String,
+    val type: MediaContentType,
+    val coverUrl: String,
+    val backdropUrl: String? = null,
+    val synopsis: String = "",
+    val category: String = "Geral",
+    val year: String = "",
+    val rating: String = "",
+    val movieStreamUrl: String? = null,
+    val isWebPlayer: Boolean = false,
+    val seasons: List<SeasonItem> = emptyList(),
+    val isFavorite: Boolean = false,
+    val isWorking: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    val totalEpisodes: Int
+        get() = if (type == MediaContentType.SERIES) seasons.sumOf { it.episodes.size } else 1
+
+    val totalSeasons: Int
+        get() = if (type == MediaContentType.SERIES) seasons.size else 0
 }

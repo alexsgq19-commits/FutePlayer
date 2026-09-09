@@ -41,8 +41,19 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.checkCurrentSession()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            android.system.Os.setenv("LIBGL_ALWAYS_SOFTWARE", "1", true)
+            android.system.Os.setenv("MESA_LOADER_DRIVER_OVERRIDE", "swrast", true)
+            android.system.Os.setenv("MESA_LOG_LEVEL", "none", true)
+            android.system.Os.setenv("MESA_DEBUG", "0", true)
+        } catch (_: Exception) {}
         enableEdgeToEdge()
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -80,9 +91,17 @@ class MainActivity : AppCompatActivity() {
                             onSplashFinished = { showSplash = false }
                         )
                     } else if (currentUser == null) {
+                        val loginNoticeMessage by viewModel.loginNoticeMessage.collectAsState()
+                        val uiState by viewModel.uiState.collectAsState()
                         com.example.ui.screens.LoginScreen(
+                            isRegistrationEnabled = uiState.isRegistrationEnabled,
+                            noticeMessage = loginNoticeMessage,
+                            onClearNotice = { viewModel.clearLoginNotice() },
                             onLogin = { cpf, pass, rememberMe, cb ->
                                 viewModel.login(cpf, pass, rememberMe, cb)
+                            },
+                            onRegister = { name, phone, cpf, pass, cb ->
+                                viewModel.registerUser(name, phone, cpf, pass, cb)
                             }
                         )
                     } else {
@@ -114,11 +133,27 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onPlayDirect = { viewModel.playDirectVideo(it) },
                                     onToggleFavorite = { viewModel.toggleFavorite(it) },
-                                    onAddQuickChannel = { title, subtitle, url, isWebPlayer, category ->
-                                        viewModel.addQuickChannel(title, subtitle, url, isWebPlayer, category)
+                                    onPlayMovie = { movie ->
+                                        viewModel.playMovie(movie)
                                     },
-                                    onEditQuickChannel = { id, title, subtitle, url, isWebPlayer, category ->
-                                        viewModel.updateQuickChannel(id, title, subtitle, url, isWebPlayer, category)
+                                    onPlayEpisode = { series, season, episode ->
+                                        viewModel.playEpisode(series, season, episode)
+                                    },
+                                    onAddOrUpdateMedia = { media ->
+                                        viewModel.addOrUpdateMedia(media)
+                                    },
+                                    onDeleteMedia = { id ->
+                                        viewModel.deleteMedia(id)
+                                    },
+                                    onToggleMediaFavorite = { id ->
+                                        viewModel.toggleMediaFavorite(id)
+                                    },
+                                    onToggleChannelWorkingStatus = { viewModel.toggleChannelWorkingStatus(it) },
+                                    onAddQuickChannel = { title, subtitle, url, isWebPlayer, category, isWorking ->
+                                        viewModel.addQuickChannel(title, subtitle, url, isWebPlayer, category, isWorking)
+                                    },
+                                    onEditQuickChannel = { id, title, subtitle, url, isWebPlayer, category, isWorking ->
+                                        viewModel.updateQuickChannel(id, title, subtitle, url, isWebPlayer, category, isWorking)
                                     },
                                     onDeleteQuickChannel = { id ->
                                         viewModel.deleteQuickChannel(id)
@@ -161,6 +196,19 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onDismissWvcInstallPrompt = {
                                         viewModel.dismissWvcInstallPrompt()
+                                    },
+                                    onUpdateSupportWhatsapp = { newNumber ->
+                                        viewModel.updateSupportWhatsappNumber(newNumber)
+                                    },
+                                    onToggleRegistrationEnabled = { enabled -> viewModel.setRegistrationEnabled(enabled) },
+                                     onTestAllChannels = {
+                                        viewModel.testAllChannels()
+                                    },
+                                    onTestSingleChannel = { channelId ->
+                                        viewModel.testSingleChannel(channelId)
+                                    },
+                                    onDismissAdminChannelAlert = {
+                                        viewModel.dismissAdminChannelAlert()
                                     }
                                 )
                             }
@@ -176,7 +224,10 @@ class MainActivity : AppCompatActivity() {
                                         castUiState = castUiState,
                                         onBack = { viewModel.navigateTo(UiScreen.Home) },
                                         onCastToggle = { viewModel.toggleCastPlayPause() },
-                                        onDisconnectCast = { viewModel.disconnectCast() }
+                                        onDisconnectCast = { viewModel.disconnectCast() },
+                                        onPlaybackError = { channelId ->
+                                            viewModel.reportChannelPlaybackError(channelId)
+                                        }
                                     )
                                 } ?: run {
                                     viewModel.navigateTo(UiScreen.Home)
@@ -212,6 +263,9 @@ class MainActivity : AppCompatActivity() {
                                 onDismiss = { showAccountDialog = false },
                                 onOpenUserManagement = {
                                     viewModel.navigateTo(UiScreen.UserManagement)
+                                },
+                                onChangePassword = { newPass, cb ->
+                                    viewModel.changeCurrentUserPassword(newPass, cb)
                                 },
                                 onLogout = {
                                     viewModel.logout()
