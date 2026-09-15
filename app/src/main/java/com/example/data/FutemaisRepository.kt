@@ -3,14 +3,17 @@ package com.example.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.example.data.models.AutoCorrectionLog
 import com.example.data.models.ChannelOption
 import com.example.data.models.ChannelTestSummary
 import com.example.data.models.EpisodeItem
 import com.example.data.models.MatchItem
 import com.example.data.models.MediaContentType
 import com.example.data.models.MediaItem
+import com.example.data.models.OFFLINE_FALLBACK_URL
 import com.example.data.models.PlayableVideo
 import com.example.data.models.SeasonItem
+import com.example.data.models.isOfflineFallbackUrl
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import kotlinx.coroutines.tasks.await
 import org.jsoup.Jsoup
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
@@ -284,6 +288,49 @@ class FutemaisRepository(context: Context) {
         }
     }
 
+    fun publishCustomNotificationToFirestore(title: String, message: String) {
+        val data = hashMapOf(
+            "title" to title,
+            "message" to message,
+            "timestamp" to System.currentTimeMillis()
+        )
+        firestore?.collection("app_data")?.document("admin_notifications")?.set(data)
+    }
+
+    fun syncCustomNotificationsFromFirestore(onNotificationFound: (title: String, message: String, timestamp: Long) -> Unit) {
+        firestore?.collection("app_data")?.document("admin_notifications")?.addSnapshotListener { doc, error ->
+            if (error != null) return@addSnapshotListener
+            if (doc != null && doc.exists()) {
+                val title = doc.getString("title") ?: ""
+                val message = doc.getString("message") ?: ""
+                val timestamp = doc.getLong("timestamp") ?: 0L
+                if (title.isNotBlank() && message.isNotBlank()) {
+                    onNotificationFound(title, message, timestamp)
+                }
+            }
+        }
+    }
+
+    suspend fun fetchLatestCustomNotification(): Triple<String, String, Long>? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        try {
+            val task = firestore?.collection("app_data")?.document("admin_notifications")?.get()
+            if (task != null) {
+                val doc = task.await()
+                if (doc != null && doc.exists()) {
+                    val title = doc.getString("title") ?: ""
+                    val message = doc.getString("message") ?: ""
+                    val timestamp = doc.getLong("timestamp") ?: 0L
+                    if (title.isNotBlank() && message.isNotBlank()) {
+                        return@withContext Triple(title, message, timestamp)
+                    }
+                }
+            }
+            return@withContext null
+        } catch (e: Exception) { 
+            return@withContext null 
+        }
+    }
+
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -523,7 +570,11 @@ class FutemaisRepository(context: Context) {
         val custom = loadCustomChannels().toMutableList()
         val idx = custom.indexOfFirst { it.id == channelId }
         if (idx >= 0) {
-            custom[idx] = custom[idx].copy(isWorking = willBeWorking)
+            custom[idx] = if (willBeWorking) {
+                custom[idx].copy(isWorking = true)
+            } else {
+                custom[idx].copy(isWorking = false)
+            }
             saveCustomChannels(custom)
         }
 
@@ -543,7 +594,11 @@ class FutemaisRepository(context: Context) {
         val custom = loadCustomChannels().toMutableList()
         val idx = custom.indexOfFirst { it.id == channelId }
         if (idx >= 0) {
-            custom[idx] = custom[idx].copy(isWorking = isWorking)
+            custom[idx] = if (isWorking) {
+                custom[idx].copy(isWorking = true)
+            } else {
+                custom[idx].copy(isWorking = false)
+            }
             saveCustomChannels(custom)
         }
 
@@ -553,7 +608,11 @@ class FutemaisRepository(context: Context) {
 
     suspend fun testSingleChannel(channel: PlayableVideo): Boolean = withContext(Dispatchers.IO) {
         val targetUrl = channel.streamUrl.ifBlank { channel.embedUrl ?: "" }.trim()
-        if (targetUrl.isBlank() || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+        if (targetUrl.isBlank() ||
+            (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) ||
+            isOfflineFallbackUrl(targetUrl) ||
+            isOfflineFallbackUrl(channel.streamUrl) ||
+            isOfflineFallbackUrl(channel.embedUrl)) {
             return@withContext false
         }
 
@@ -602,6 +661,184 @@ class FutemaisRepository(context: Context) {
         }
     }
 
+    private fun getKnownBackupChannelUrls(titleLower: String): List<Pair<String, String>> {
+        val list = mutableListOf<Pair<String, String>>()
+        if (titleLower.contains("aparecida")) {
+            list.add("https://cdn.jmvstream.com/w/LVW-9716/LVW9716_HbtQtezcaw/playlist.m3u8" to "JMVStream CDN Aparecida")
+        }
+        if (titleLower.contains("redevida") || titleLower.contains("rede vida")) {
+            list.add("https://cvd1.cds.ebtcvd.net/live-redevida/smil:redevida.smil/playlist.m3u8" to "EBTCVD CDN Rede Vida")
+        }
+        if (titleLower.contains("canção nova") || titleLower.contains("cancao nova")) {
+            list.add("https://5c65286fc6ace.streamlock.net/cancaonova/CancaoNova.stream_720p/playlist.m3u8" to "Streamlock Canção Nova")
+        }
+        if (titleLower.contains("evangelizar")) {
+            list.add("https://tvevangelizar.brasilstream.com.br/hls/tvevangelizar/index.m3u8" to "BrasilStream Evangelizar")
+        }
+        if (titleLower.contains("século 21") || titleLower.contains("seculo 21")) {
+            list.add("https://cdn.jmvstream.com/w/LVW-10874/LVW10874_Xg72X/playlist.m3u8" to "JMVStream Século 21")
+        }
+        if (titleLower.contains("pai eterno")) {
+            list.add("https://cdn.jmvstream.com/w/LVW-10313/LVW10313_live/playlist.m3u8" to "JMVStream Pai Eterno")
+        }
+        if (titleLower.contains("sony one") || titleLower.contains("sony")) {
+            list.add("https://spt-sonyoneclassicas-1-br.samsung.wurl.tv/playlist.m3u8" to "Samsung Wurl Sony One")
+        }
+        if (titleLower.contains("globo")) {
+            list.add("https://canais-top.digital/assistir-tv-globo-ao-vivo-online-gratis/" to "Canais-Top Globo")
+            list.add("https://links2.temporariofutemais.com/canais3/opcao1.php?id=canal1" to "Futemais Server Globo")
+        }
+        if (titleLower.contains("sbt")) {
+            list.add("https://canais-top.digital/assistir-sbt-ao-vivo-online-gratis/" to "Canais-Top SBT")
+        }
+        if (titleLower.contains("record")) {
+            list.add("https://stmv1.srvif.com/recordnews/recordnews/playlist.m3u8" to "Record News CDN")
+        }
+        if (titleLower.contains("band")) {
+            list.add("https://canais-top.digital/assistir-band-ao-vivo-online-gratis/" to "Canais-Top Band")
+        }
+        if (titleLower.contains("espn")) {
+            list.add("https://canais-top.digital/assistir-espn-ao-vivo-online-gratis/" to "Canais-Top ESPN")
+            list.add("https://links2.temporariofutemais.com/canais3/opcao1.php?id=canal3" to "Futemais ESPN")
+        }
+        if (titleLower.contains("premiere")) {
+            list.add("https://canais-top.digital/assistir-premiere-ao-vivo-online-gratis/" to "Canais-Top Premiere")
+            list.add("https://links2.temporariofutemais.com/canais3/opcao1.php?id=canal2" to "Futemais Premiere")
+        }
+        if (titleLower.contains("sportv")) {
+            list.add("https://canais-top.digital/assistir-sportv-ao-vivo-online-gratis/" to "Canais-Top SporTV")
+            list.add("https://links2.temporariofutemais.com/canais3/opcao1.php?id=canal4" to "Futemais SporTV")
+        }
+        if (titleLower.contains("cazé") || titleLower.contains("caze")) {
+            list.add("https://www.youtube.com/@CazeTV/live" to "YouTube CazéTV Live")
+        }
+        return list
+    }
+
+    suspend fun attemptResolveChannel(channel: PlayableVideo): Pair<PlayableVideo, String>? = withContext(Dispatchers.IO) {
+        val titleLower = channel.title.lowercase()
+        val candidateUrls = mutableListOf<Pair<String, String>>()
+
+        try {
+            val req = Request.Builder()
+                .url("https://canais-top.digital/assistirtvonline/")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                .build()
+            val resp = client.newCall(req).execute()
+            val html = resp.body?.string() ?: ""
+            if (html.isNotBlank()) {
+                val doc = Jsoup.parse(html)
+                for (el in doc.select("a[href], .channel-item, .tv-item, .card, article")) {
+                    val t = el.text().trim().lowercase()
+                    val href = el.attr("href").trim()
+                    if (t.isNotBlank() && href.isNotBlank() && (href.startsWith("http://") || href.startsWith("https://"))) {
+                        if (t.contains(titleLower) || titleLower.contains(t)) {
+                            candidateUrls.add(href to "canais-top.digital")
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        getKnownBackupChannelUrls(titleLower).forEach { (url, src) ->
+            candidateUrls.add(url to src)
+        }
+
+        for ((url, src) in candidateUrls) {
+            val isM3u8 = url.contains(".m3u8", ignoreCase = true)
+            val candidate = channel.copy(
+                streamUrl = url,
+                embedUrl = if (url.contains(".php") || url.contains("embed") || !isM3u8) url else channel.embedUrl,
+                forceWebPlayer = if (isM3u8) false else (channel.forceWebPlayer || !url.contains(".m3u8"))
+            )
+            if (testSingleChannel(candidate)) {
+                return@withContext candidate to src
+            }
+        }
+        return@withContext null
+    }
+
+    suspend fun updateChannelsFromCanaisTop(): List<String> = withContext(Dispatchers.IO) {
+        val fixedChannels = mutableListOf<String>()
+        try {
+            val req = Request.Builder()
+                .url("https://canais-top.digital/assistirtvonline/")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .build()
+
+            val resp = client.newCall(req).execute()
+            val html = resp.body?.string() ?: ""
+            if (html.isBlank()) return@withContext fixedChannels
+
+            val doc = Jsoup.parse(html)
+            val channelElements = doc.select("a[href], .channel-item, .tv-item, .card, article")
+            val scrapedMap = mutableMapOf<String, String>()
+
+            for (el in channelElements) {
+                val title = el.text().trim()
+                val href = el.attr("href").trim()
+                if (title.isNotBlank() && href.isNotBlank() && (href.startsWith("http://") || href.startsWith("https://"))) {
+                    scrapedMap[title.lowercase()] = href
+                }
+            }
+
+            if (scrapedMap.isNotEmpty()) {
+                val currentCustom = loadCustomChannels().toMutableList()
+                var updated = false
+                val allCurrent = getQuickChannels()
+                for (ch in allCurrent) {
+                    if (!ch.isWorking) {
+                        val match = scrapedMap.entries.firstOrNull { (k, _) ->
+                            k.contains(ch.title.lowercase()) || ch.title.lowercase().contains(k)
+                        }
+                        if (match != null) {
+                            val newUrl = match.value
+                            val candidate = ch.copy(
+                                streamUrl = newUrl,
+                                embedUrl = if (newUrl.contains(".php") || newUrl.contains("embed")) newUrl else ch.embedUrl,
+                                forceWebPlayer = !newUrl.endsWith(".m3u8", ignoreCase = true)
+                            )
+                            // Test candidate
+                            if (testSingleChannel(candidate)) {
+                                // Post-correction test to guarantee it really works!
+                                kotlinx.coroutines.delay(300)
+                                if (testSingleChannel(candidate)) {
+                                    val updatedCh = candidate.copy(isWorking = true)
+                                    val idx = currentCustom.indexOfFirst { it.id == ch.id }
+                                    if (idx >= 0) {
+                                        currentCustom[idx] = updatedCh
+                                    } else {
+                                        currentCustom.add(updatedCh)
+                                    }
+                                    setChannelWorkingStatus(ch.id, true)
+                                    fixedChannels.add(ch.title)
+                                    addAutoCorrectionLog(
+                                        AutoCorrectionLog(
+                                            itemType = "CANAL",
+                                            title = ch.title,
+                                            description = "Link alternativo restabelecido e re-testado com sucesso via canais-top.digital",
+                                            status = "Corrigido e Operacional (Testado e Aprovado)"
+                                        )
+                                    )
+                                    updated = true
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (updated) {
+                    saveCustomChannels(currentCustom)
+                    syncToFirestore()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating channels from canais-top", e)
+        }
+        return@withContext fixedChannels
+    }
+
     suspend fun testAllChannels(
         onProgress: (index: Int, total: Int, channel: PlayableVideo, isWorking: Boolean) -> Unit
     ): ChannelTestSummary = withContext(Dispatchers.IO) {
@@ -614,18 +851,30 @@ class FutemaisRepository(context: Context) {
 
         currentChannels.forEachIndexed { index, channel ->
             val isWorking = testSingleChannel(channel)
+            val currentChannel = channel
+
             if (isWorking) {
                 workingCount++
+                setChannelWorkingStatus(currentChannel.id, true)
             } else {
                 offlineCount++
-                offlineList.add(channel.copy(isWorking = false))
+                val offlineItem = currentChannel.copy(isWorking = false)
+                offlineList.add(offlineItem)
                 if (channel.isWorking) {
-                    newlyOfflineList.add(channel.copy(isWorking = false))
+                    newlyOfflineList.add(offlineItem)
                 }
+                setChannelWorkingStatus(currentChannel.id, false)
+                addAutoCorrectionLog(
+                    AutoCorrectionLog(
+                        itemType = "CANAL",
+                        title = channel.title,
+                        description = "Canal testado e detectado fora do ar (sem resposta de streaming). Admin notificado.",
+                        status = "Fora do Ar (Requer Atenção do Admin)"
+                    )
+                )
             }
 
-            setChannelWorkingStatus(channel.id, isWorking)
-            onProgress(index + 1, total, channel, isWorking)
+            onProgress(index + 1, total, currentChannel, isWorking)
         }
 
         ChannelTestSummary(
@@ -644,19 +893,25 @@ class FutemaisRepository(context: Context) {
             addCustomCategory(cat)
         }
 
+        val effectiveChannel = if (isOfflineFallbackUrl(channel.streamUrl) || isOfflineFallbackUrl(channel.embedUrl)) {
+            channel.copy(isWorking = false)
+        } else {
+            channel
+        }
+
         val current = loadCustomChannels().toMutableList()
         // Replace if exists, or prepend
-        val idx = current.indexOfFirst { it.id == channel.id }
+        val idx = current.indexOfFirst { it.id == effectiveChannel.id }
         if (idx >= 0) {
-            current[idx] = channel
+            current[idx] = effectiveChannel
         } else {
-            current.add(0, channel)
+            current.add(0, effectiveChannel)
         }
         saveCustomChannels(current)
 
         val deleted = prefs.getStringSet("deleted_channel_ids", emptySet())?.toMutableSet() ?: mutableSetOf()
-        if (deleted.contains(channel.id)) {
-            deleted.remove(channel.id)
+        if (deleted.contains(effectiveChannel.id)) {
+            deleted.remove(effectiveChannel.id)
             prefs.edit().putStringSet("deleted_channel_ids", deleted).apply()
         }
         
@@ -709,6 +964,66 @@ class FutemaisRepository(context: Context) {
         prefs.edit().putStringSet("favorite_ids", current).apply()
         _favoriteIds.value = current
         _mediaCatalogFlow.value = getMediaCatalog()
+    }
+
+    // =========================================================================
+    // RELATÓRIO DE CORREÇÕES AUTOMÁTICAS
+    // =========================================================================
+
+    fun getAutoCorrectionLogs(): List<AutoCorrectionLog> {
+        val jsonStr = prefs.getString("auto_correction_logs", null) ?: return emptyList()
+        val list = mutableListOf<AutoCorrectionLog>()
+        try {
+            val arr = org.json.JSONArray(jsonStr)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    AutoCorrectionLog(
+                        id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                        itemType = obj.optString("itemType", "CANAL"),
+                        title = obj.optString("title", ""),
+                        description = obj.optString("description", ""),
+                        status = obj.optString("status", "Corrigido e Operacional")
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing auto correction logs", e)
+        }
+        return list
+    }
+
+    fun addAutoCorrectionLog(log: AutoCorrectionLog) {
+        val current = getAutoCorrectionLogs().toMutableList()
+        current.removeAll { it.title.equals(log.title, ignoreCase = true) && it.itemType == log.itemType }
+        current.add(0, log)
+        val trimmed = if (current.size > 50) current.take(50) else current
+        saveAutoCorrectionLogs(trimmed)
+    }
+
+    fun clearAutoCorrectionLogs() {
+        prefs.edit().remove("auto_correction_logs").apply()
+    }
+
+    private fun saveAutoCorrectionLogs(list: List<AutoCorrectionLog>) {
+        try {
+            val arr = org.json.JSONArray()
+            list.forEach { item ->
+                val obj = org.json.JSONObject().apply {
+                    put("id", item.id)
+                    put("timestamp", item.timestamp)
+                    put("itemType", item.itemType)
+                    put("title", item.title)
+                    put("description", item.description)
+                    put("status", item.status)
+                }
+                arr.put(obj)
+            }
+            prefs.edit().putString("auto_correction_logs", arr.toString()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving auto correction logs", e)
+        }
     }
 
     // =========================================================================
@@ -1087,23 +1402,38 @@ class FutemaisRepository(context: Context) {
         val allMedia = custom.filter { !deleted.contains(it.id) } + activeDefaults
         val favs = _favoriteIds.value
         return allMedia.map { item ->
-            item.copy(isFavorite = favs.contains(item.id))
+            val hasOfflineUrl = if (item.type == MediaContentType.MOVIE) {
+                isOfflineFallbackUrl(item.movieStreamUrl)
+            } else {
+                val eps = item.seasons.flatMap { it.episodes }
+                eps.isNotEmpty() && eps.all { isOfflineFallbackUrl(it.streamUrl) }
+            }
+            val working = if (hasOfflineUrl) false else item.isWorking
+            item.copy(isFavorite = favs.contains(item.id), isWorking = working)
         }
     }
 
     fun addOrUpdateMediaItem(item: MediaItem): List<MediaItem> {
-        val custom = loadCustomMediaCatalog().toMutableList()
-        val idx = custom.indexOfFirst { it.id == item.id }
-        if (idx >= 0) {
-            custom[idx] = item
+        val hasOfflineUrl = if (item.type == MediaContentType.MOVIE) {
+            isOfflineFallbackUrl(item.movieStreamUrl)
         } else {
-            custom.add(0, item)
+            val eps = item.seasons.flatMap { it.episodes }
+            eps.isNotEmpty() && eps.all { isOfflineFallbackUrl(it.streamUrl) }
+        }
+        val effectiveItem = if (hasOfflineUrl) item.copy(isWorking = false) else item
+
+        val custom = loadCustomMediaCatalog().toMutableList()
+        val idx = custom.indexOfFirst { it.id == effectiveItem.id }
+        if (idx >= 0) {
+            custom[idx] = effectiveItem
+        } else {
+            custom.add(0, effectiveItem)
         }
         saveCustomMediaCatalog(custom)
 
         val deleted = (prefs.getStringSet("deleted_media_ids", emptySet()) ?: emptySet()).toMutableSet()
-        if (deleted.contains(item.id)) {
-            deleted.remove(item.id)
+        if (deleted.contains(effectiveItem.id)) {
+            deleted.remove(effectiveItem.id)
             prefs.edit().putStringSet("deleted_media_ids", deleted).apply()
         }
 
@@ -1476,7 +1806,7 @@ class FutemaisRepository(context: Context) {
                 id = channel.id,
                 title = "$matchTitle (${channel.name})",
                 subtitle = championship,
-                streamUrl = directHlsUrl ?: channel.pageUrl,
+                streamUrl = channel.resolvedStreamUrl?.takeIf { it.isNotBlank() } ?: directHlsUrl ?: channel.pageUrl,
                 posterUrl = posterUrl,
                 isLive = true,
                 headers = headers,
@@ -1492,7 +1822,7 @@ class FutemaisRepository(context: Context) {
                     id = channel.id,
                     title = "$matchTitle (${channel.name})",
                     subtitle = championship,
-                    streamUrl = channel.pageUrl,
+                    streamUrl = channel.resolvedStreamUrl?.takeIf { it.isNotBlank() } ?: channel.pageUrl,
                     posterUrl = posterUrl,
                     isLive = true,
                     embedUrl = channel.pageUrl
@@ -1842,7 +2172,8 @@ class FutemaisRepository(context: Context) {
         val favs = _favoriteIds.value
         val offline = prefs.getStringSet("offline_channel_ids", emptySet()) ?: emptySet()
         return allChannels.map { ch ->
-            val working = if (offline.contains(ch.id)) false else ch.isWorking
+            val hasOfflineUrl = isOfflineFallbackUrl(ch.streamUrl) || isOfflineFallbackUrl(ch.embedUrl)
+            val working = if (offline.contains(ch.id) || hasOfflineUrl) false else ch.isWorking
             ch.copy(isFavorite = favs.contains(ch.id), isWorking = working)
         }
     }

@@ -7,18 +7,28 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.annotation.OptIn
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusable
+import coil.compose.AsyncImage
 import com.example.data.MoviesRepository
+import com.example.data.models.OFFLINE_FALLBACK_URL
+import com.example.data.models.isOfflineFallbackUrl
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +36,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -61,6 +72,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Tv
@@ -88,12 +100,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -126,20 +140,151 @@ import com.example.cast.CastUiState
 import com.example.data.models.PlayableVideo
 import com.example.ui.components.ChromecastButton
 import com.example.ui.components.WebVideoCasterButton
+import com.example.ui.components.launchWebVideoCaster
 import com.example.ui.theme.StadiumAccentRed
 import com.example.ui.theme.StadiumCyanSecondary
 import com.example.ui.theme.StadiumGreenPrimary
 import kotlinx.coroutines.delay
+
+class WebPlayerBridge(
+    private val onProgress: (currentTimeMs: Long, durationMs: Long) -> Unit,
+    private val onEnded: () -> Unit,
+    private val onPlayStateChanged: (Boolean) -> Unit,
+    private val onMediaDetected: ((url: String, mimeType: String?) -> Unit)? = null
+) {
+    @JavascriptInterface
+    fun onVideoProgress(currentTimeSeconds: Double, durationSeconds: Double) {
+        val curMs = (currentTimeSeconds * 1000).toLong().coerceAtLeast(0L)
+        val durMs = (durationSeconds * 1000).toLong().coerceAtLeast(0L)
+        onProgress(curMs, durMs)
+    }
+
+    @JavascriptInterface
+    fun onVideoEnded() {
+        onEnded()
+    }
+
+    @JavascriptInterface
+    fun onVideoPlayState(isPlaying: Boolean) {
+        onPlayStateChanged(isPlaying)
+    }
+
+    @JavascriptInterface
+    fun onMediaFound(streamUrl: String, mimeType: String?) {
+        if (streamUrl.isNotBlank() && streamUrl.startsWith("http")) {
+            onMediaDetected?.invoke(streamUrl, mimeType)
+        }
+    }
+}
+
+@Composable
+fun NextEpisodeBannerCard(
+    nextEpisodeTitle: String?,
+    isPlaybackEnded: Boolean,
+    onPlayNextEpisode: () -> Unit,
+    onDismiss: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF13111C).copy(alpha = 0.95f)),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.5.dp, Color(0xFFD500F9)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        modifier = modifier.testTag("btn_bottom_next_episode_card")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (isPlaybackEnded) StadiumGreenPrimary else Color(0xFFD500F9))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isPlaybackEnded) "Episódio Finalizado" else "Próximo Episódio a seguir",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+                if (!nextEpisodeTitle.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = nextEpisodeTitle,
+                        color = StadiumCyanSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = onPlayNextEpisode,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD500F9)),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                    modifier = Modifier.testTag("btn_autoplay_next_episode")
+                ) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        contentDescription = "Próximo Episódio",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Próximo Ep.",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 13.sp
+                    )
+                }
+                if (onDismiss != null) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Fechar aviso",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
     video: PlayableVideo,
     castUiState: CastUiState,
+    hasNextEpisode: Boolean = false,
+    nextEpisodeTitle: String? = null,
+    onPlayNextEpisode: () -> Unit = {},
     onBack: () -> Unit,
     onCastToggle: () -> Unit,
+    onSeekCast: (Long) -> Unit = {},
+    onSeekCastForward: () -> Unit = {},
+    onSeekCastBackward: () -> Unit = {},
     onDisconnectCast: () -> Unit,
     onPlaybackError: (String) -> Unit = {},
+    onCastVideo: (String?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -149,28 +294,78 @@ fun PlayerScreen(
     var showControls by remember { mutableStateOf(true) }
     var isPlaying by remember { mutableStateOf(true) }
     var isBuffering by remember { mutableStateOf(true) }
+    var isPlaybackEnded by remember { mutableStateOf(false) }
+    var isNextEpisodeDismissed by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
+    // State for media sniffed from WebView
+    var sniffedMediaUrl by remember { mutableStateOf<String?>(null) }
+    var sniffedMimeType by remember { mutableStateOf<String?>(null) }
+    var mediaRouteButtonRef by remember { mutableStateOf<androidx.mediarouter.app.MediaRouteButton?>(null) }
+    
+    val activeStreamUrl = sniffedMediaUrl ?: video.streamUrl
+
     // Auto-detect if direct HLS / video media URL is available or if web player should be primary
-    val hasDirectMediaUrl = remember(video.streamUrl) {
-        val url = video.streamUrl.lowercase()
-        (url.contains(".m3u8") || url.contains(".mp4") || url.contains(".ts") || url.contains(".mpd")) &&
-        !url.contains(".php") && !url.contains("cxtv.com.br/tv-ao-vivo") && !url.contains("temporariofutemais")
+    val hasDirectMediaUrl = remember(activeStreamUrl) {
+        val url = activeStreamUrl.lowercase()
+        com.example.util.VideoLinkCompatibility.isDirectMediaStream(url) &&
+        !url.contains(".php") && !url.contains("cxtv.com.br/tv-ao-vivo") && !url.contains("temporariofutemais") || sniffedMediaUrl != null
     }
-    var useWebviewPlayer by remember(video.streamUrl, video.embedUrl, video.forceWebPlayer, hasDirectMediaUrl) { 
-        mutableStateOf(video.forceWebPlayer || (!hasDirectMediaUrl && !video.embedUrl.isNullOrBlank())) 
+    var useWebviewPlayer by remember(video.streamUrl, video.embedUrl, video.forceWebPlayer) { 
+        val initialHasDirectMedia = com.example.util.VideoLinkCompatibility.isDirectMediaStream(video.streamUrl.lowercase())
+        mutableStateOf(video.forceWebPlayer || (!initialHasDirectMedia && !video.embedUrl.isNullOrBlank())) 
     }
     var activeEmbedUrl by remember(video.embedUrl, video.streamUrl) {
         mutableStateOf(video.embedUrl?.takeIf { it.isNotBlank() } ?: video.streamUrl)
     }
+
+    val targetCastUrl = remember(sniffedMediaUrl, video.streamUrl, activeEmbedUrl, video.embedUrl, video.isLive) {
+        val validSniffed = sniffedMediaUrl?.takeIf { !com.example.util.VideoLinkCompatibility.isAdVideoUrl(it) }
+        val validStream = video.streamUrl.takeIf { it.isNotBlank() && !com.example.util.VideoLinkCompatibility.isAdVideoUrl(it) }
+        val validEmbed = video.embedUrl?.takeIf { it.isNotBlank() && !com.example.util.VideoLinkCompatibility.isAdVideoUrl(it) }
+        
+        if (video.isLive) {
+            // Para canais ao vivo: transmite exatamente o link de transmissão cadastrado no canal pelo administrador
+            validStream ?: validSniffed ?: validEmbed ?: activeEmbedUrl.takeIf { !com.example.util.VideoLinkCompatibility.isAdVideoUrl(it) } ?: ""
+        } else {
+            // Para filmes e séries: prioriza a mídia sniffada se disponível
+            validSniffed ?: validStream ?: validEmbed ?: activeEmbedUrl.takeIf { !com.example.util.VideoLinkCompatibility.isAdVideoUrl(it) } ?: ""
+        }
+    }
+
+    LaunchedEffect(castUiState.isConnected, targetCastUrl) {
+        if (castUiState.isConnected && targetCastUrl.isNotBlank()) {
+            onCastVideo(targetCastUrl)
+        }
+    }
+
+    val isMovieOrSeries = !video.isLive
+
+    LaunchedEffect(sniffedMediaUrl) {
+        if (sniffedMediaUrl != null && isMovieOrSeries) {
+            useWebviewPlayer = false
+        }
+    }
+
+    var currentPositionMs by remember { mutableLongStateOf(0L) }
+    var durationMs by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(video.streamUrl, video.embedUrl, video.id) {
+        activeEmbedUrl = video.embedUrl?.takeIf { it.isNotBlank() } ?: video.streamUrl
+        isPlaybackEnded = false
+        isNextEpisodeDismissed = false
+        currentPositionMs = 0L
+        durationMs = 0L
+        errorMessage = null
+        sniffedMediaUrl = null
+        sniffedMimeType = null
+    }
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    var webViewReloadKey by remember { mutableIntStateOf(0) }
     var isWebViewLoading by remember { mutableStateOf(true) }
     var isWebViewError by remember { mutableStateOf(false) }
 
     var resizeMode by remember { mutableStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
-
-    var currentPositionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
 
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE || isFullscreen
@@ -205,12 +400,43 @@ fun PlayerScreen(
         }
     }
 
+    // Periodic progress query for Web Player to ensure episode end detection
+    LaunchedEffect(useWebviewPlayer, webViewInstance) {
+        if (useWebviewPlayer) {
+            while (true) {
+                delay(1200)
+                try {
+                    webViewInstance?.evaluateJavascript("""
+                        (function() {
+                            try {
+                                var v = document.querySelector('video');
+                                if (v && window.AndroidBridge && !isNaN(v.duration) && v.duration > 0) {
+                                    window.AndroidBridge.onVideoProgress(v.currentTime, v.duration);
+                                    if (v.ended) { window.AndroidBridge.onVideoEnded(); }
+                                }
+                            } catch(e){}
+                        })();
+                    """.trimIndent(), null)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    val isEpisodeEnding = hasNextEpisode && !isNextEpisodeDismissed && (
+        isPlaybackEnded ||
+        (durationMs > 15_000L && (currentPositionMs >= durationMs - 45_000L || (durationMs > 60_000L && (currentPositionMs.toDouble() / durationMs.toDouble()) >= 0.93)))
+    )
+
     // Create and configure ExoPlayer with robust buffer, decoders and data sources
-    val exoPlayer = remember(video.streamUrl, useWebviewPlayer) {
+    val exoPlayer = remember(activeStreamUrl, useWebviewPlayer) {
         if (useWebviewPlayer || !hasDirectMediaUrl) null
         else {
-            val defaultUserAgent = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-            val userAgent = video.headers["User-Agent"] ?: defaultUserAgent
+            val headerMap = com.example.util.VideoLinkCompatibility.buildWvcHeaders(
+                streamUrl = activeStreamUrl,
+                embedUrl = video.embedUrl,
+                customHeaders = video.headers
+            )
+            val userAgent = headerMap["User-Agent"] ?: "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
             val httpDataSourceFactory = DefaultHttpDataSource.Factory()
                 .setUserAgent(userAgent)
@@ -218,53 +444,19 @@ fun PlayerScreen(
                 .setKeepPostFor302Redirects(true)
                 .setConnectTimeoutMs(25000)
                 .setReadTimeoutMs(25000)
-
-            val headerMap = mutableMapOf<String, String>()
-            headerMap["User-Agent"] = userAgent
-            headerMap["Accept"] = "*/*"
-            headerMap["Accept-Language"] = "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
-            headerMap["Sec-Fetch-Mode"] = "cors"
-            headerMap["Sec-Fetch-Site"] = "cross-site"
-            headerMap["Sec-Fetch-Dest"] = "video"
-
-            video.headers.forEach { (k, v) ->
-                headerMap[k] = v
-            }
-            // Only add Referer if explicitly specified in headers, or if streamUrl and embedUrl share the same host
-            if (!headerMap.containsKey("Referer")) {
-                if (!video.embedUrl.isNullOrBlank()) {
-                    val streamHost = try { Uri.parse(video.streamUrl).host } catch (_: Exception) { null }
-                    val embedHost = try { Uri.parse(video.embedUrl).host } catch (_: Exception) { null }
-                    if (streamHost != null && embedHost != null && streamHost.equals(embedHost, ignoreCase = true)) {
-                        headerMap["Referer"] = video.embedUrl
-                    }
-                }
-            }
-            httpDataSourceFactory.setDefaultRequestProperties(headerMap)
+                .setDefaultRequestProperties(headerMap)
 
             val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
-            val uri = Uri.parse(video.streamUrl)
-            val isHls = video.streamUrl.contains(".m3u8", ignoreCase = true) || 
-                        video.streamUrl.contains("/live/", ignoreCase = true)
-
-            val mediaItem = MediaItem.Builder()
-                .setUri(uri)
-                .apply {
-                    if (isHls) {
-                        setMimeType(MimeTypes.APPLICATION_M3U8)
-                    }
-                }
-                .build()
-
-            val mediaSource: MediaSource = if (isHls) {
-                HlsMediaSource.Factory(dataSourceFactory)
-                    .setAllowChunklessPreparation(false) // false allows accurate track & segment resolution on live streams
-                    .createMediaSource(mediaItem)
-            } else {
-                ProgressiveMediaSource.Factory(dataSourceFactory)
-                    .createMediaSource(mediaItem)
+            val uri = Uri.parse(activeStreamUrl)
+            val mimeType = com.example.util.VideoLinkCompatibility.resolveMimeType(activeStreamUrl)
+            val mediaItemBuilder = MediaItem.Builder().setUri(uri)
+            if (!mimeType.isNullOrBlank()) {
+                mediaItemBuilder.setMimeType(mimeType)
             }
+            val mediaItem = mediaItemBuilder.build()
+            val mediaSource = DefaultMediaSourceFactory(dataSourceFactory)
+                .createMediaSource(mediaItem)
 
             val loadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
@@ -295,6 +487,7 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
+                isPlaybackEnded = playbackState == Player.STATE_ENDED
                 if (playbackState == Player.STATE_READY) {
                     errorMessage = null
                     durationMs = exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L
@@ -310,10 +503,16 @@ fun PlayerScreen(
                 val is403 = rawMsg.contains("403") || error.errorCodeName.contains("403") || error.cause?.message?.contains("403") == true
                 val is404 = rawMsg.contains("404") || error.cause?.message?.contains("404") == true
                 
-                errorMessage = when {
-                    is403 -> "Servidor bloqueou requisição direta (Erro 403). Alterne para o Player Web ou use o transmissor."
-                    is404 -> "Transmissão ou arquivo não encontrado (Erro 404). Link indisponível no momento."
-                    else -> "Erro de reprodução: ${error.localizedMessage ?: "Verifique a conexão com a internet"}"
+                // Automatically fallback to WebView player on playback error if using native player
+                if (!useWebviewPlayer) {
+                    useWebviewPlayer = true
+                    errorMessage = "Player nativo falhou. Alternando automaticamente para Web Player..."
+                } else {
+                    errorMessage = when {
+                        is403 -> "Servidor bloqueou requisição (Erro 403). Tente o Web Video Caster."
+                        is404 -> "Arquivo não encontrado (Erro 404)."
+                        else -> "Erro de reprodução: ${error.localizedMessage ?: "Falha ao carregar stream"}"
+                    }
                 }
                 isBuffering = false
                 onPlaybackError(video.id)
@@ -342,12 +541,80 @@ fun PlayerScreen(
         }
     }
 
+    val playerFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        try { playerFocusRequester.requestFocus() } catch (_: Exception) {}
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
             .testTag("player_screen_root")
+            .focusRequester(playerFocusRequester)
+            .focusable()
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyUp) {
+                    when (keyEvent.nativeKeyEvent.keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                        android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                        android.view.KeyEvent.KEYCODE_ENTER -> {
+                            showControls = true
+                            if (exoPlayer != null) {
+                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                            }
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                            showControls = true
+                            exoPlayer?.play()
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                            showControls = true
+                            exoPlayer?.pause()
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                            showControls = true
+                            exoPlayer?.let { player ->
+                                player.seekTo((player.currentPosition + 10_000L).coerceAtMost(if (player.duration > 0) player.duration else Long.MAX_VALUE))
+                            }
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                            showControls = true
+                            exoPlayer?.let { player ->
+                                player.seekTo((player.currentPosition - 10_000L).coerceAtLeast(0L))
+                            }
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP,
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            showControls = true
+                            true
+                        }
+                        else -> false
+                    }
+                } else false
+            }
     ) {
+        // Hidden Chromecast button instance to bind MediaRouteButton reference for 3-dots menu
+        Box(modifier = Modifier.size(1.dp).alpha(0.001f)) {
+            ChromecastButton(
+                castUiState = castUiState,
+                onCastConnectedClick = { onCastToggle() },
+                onMediaRouteButtonCreated = { button -> mediaRouteButtonRef = button }
+            )
+        }
+
+        val isOfflineItem = !video.isWorking ||
+                isOfflineFallbackUrl(video.streamUrl) ||
+                isOfflineFallbackUrl(activeEmbedUrl) ||
+                isOfflineFallbackUrl(video.embedUrl)
+
         if (castUiState.isConnected) {
             // ==========================================
             // CHROMECAST REMOTE PLAYBACK HUB
@@ -355,33 +622,53 @@ fun PlayerScreen(
             CastPlaybackHub(
                 video = video,
                 castUiState = castUiState,
+                streamUrl = targetCastUrl,
                 onBack = onBack,
                 onDisconnect = onDisconnectCast,
-                onTogglePlayPause = { onCastToggle() }
+                onTogglePlayPause = { onCastToggle() },
+                onSeekCast = onSeekCast,
+                onSeekCastForward = onSeekCastForward,
+                onSeekCastBackward = onSeekCastBackward
+            )
+        } else if (isOfflineItem) {
+            // ==========================================
+            // CANAL / FILME / SÉRIE INDISPONÍVEL
+            // ==========================================
+            UnavailablePlaybackScreen(
+                video = video,
+                onBack = onBack
             )
         } else if (useWebviewPlayer) {
             // ==========================================
             // ISOLATED WEB PLAYER (PURE VIDEO ONLY)
             // ==========================================
+            val isHiddenSniffing = isMovieOrSeries && sniffedMediaUrl == null
             Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                key(activeEmbedUrl, isWebViewError) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            try {
-                                java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/js").mkdirs()
-                                java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm").mkdirs()
-                            } catch (_: Exception) {}
-
-                            WebView(ctx).apply {
-                                layoutParams = ViewGroup.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                )
-                                setBackgroundColor(android.graphics.Color.BLACK)
+                if (!isWebViewError) {
+                    key(activeEmbedUrl, webViewReloadKey) {
+                        AndroidView(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(if (isHiddenSniffing) Modifier.alpha(0.01f) else Modifier.alpha(1f)),
+                            factory = { ctx ->
                                 try {
-                                    setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+                                    java.io.File(ctx.cacheDir, "app_webview/Default/HTTP Cache/Code Cache/js").mkdirs()
+                                    java.io.File(ctx.cacheDir, "app_webview/Default/HTTP Cache/Code Cache/wasm").mkdirs()
+                                    java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/js").mkdirs()
+                                    java.io.File(ctx.cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm").mkdirs()
+                                    java.io.File(ctx.dataDir, "app_webview/Default/HTTP Cache/Code Cache/js").mkdirs()
+                                    java.io.File(ctx.dataDir, "app_webview/Default/HTTP Cache/Code Cache/wasm").mkdirs()
                                 } catch (_: Exception) {}
+
+                                WebView(ctx).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                    setBackgroundColor(android.graphics.Color.BLACK)
+                                    try {
+                                        setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
+                                    } catch (_: Exception) {}
 
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
@@ -392,6 +679,7 @@ fun PlayerScreen(
                                 settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
                                 settings.setSupportMultipleWindows(false)
                                 settings.setJavaScriptCanOpenWindowsAutomatically(false)
+                                settings.setGeolocationEnabled(false)
                                 settings.loadWithOverviewMode = true
                                 settings.useWideViewPort = true
                                 settings.allowContentAccess = true
@@ -405,6 +693,34 @@ fun PlayerScreen(
                                     android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                                 } catch (_: Exception) {}
 
+                                // Bridge for progress, episode end detection, and video stream sniffing
+                                addJavascriptInterface(
+                                    WebPlayerBridge(
+                                        onProgress = { cur, dur ->
+                                            currentPositionMs = cur
+                                            if (dur > 0L) {
+                                                durationMs = dur
+                                            }
+                                            if (dur > 0L && cur >= dur - 1500L) {
+                                                isPlaybackEnded = true
+                                            }
+                                        },
+                                        onEnded = {
+                                            isPlaybackEnded = true
+                                        },
+                                        onPlayStateChanged = { playing ->
+                                            isPlaying = playing
+                                        },
+                                        onMediaDetected = { sniffedUrl, mime ->
+                                            if (!sniffedUrl.isNullOrBlank() && sniffedMediaUrl != sniffedUrl) {
+                                                sniffedMediaUrl = sniffedUrl
+                                                sniffedMimeType = mime
+                                            }
+                                        }
+                                    ),
+                                    "AndroidBridge"
+                                )
+
                                 webChromeClient = object : WebChromeClient() {
                                     override fun onCreateWindow(
                                         view: WebView?,
@@ -412,6 +728,10 @@ fun PlayerScreen(
                                         isUserGesture: Boolean,
                                         resultMsg: android.os.Message?
                                     ): Boolean {
+                                        // Block popups for movies and series
+                                        if (isMovieOrSeries) {
+                                            return false
+                                        }
                                         val transport = resultMsg?.obj as? WebView.WebViewTransport
                                         transport?.webView = view
                                         resultMsg?.sendToTarget()
@@ -419,6 +739,31 @@ fun PlayerScreen(
                                     }
                                 }
                                 webViewClient = object : WebViewClient() {
+                                    override fun shouldInterceptRequest(
+                                        view: WebView?,
+                                        request: android.webkit.WebResourceRequest?
+                                    ): android.webkit.WebResourceResponse? {
+                                        val reqUrl = request?.url?.toString() ?: ""
+                                        
+                                        // NEVER block direct playable streams or HLS/TS chunks
+                                        if (com.example.util.VideoLinkCompatibility.isDirectMediaStream(reqUrl)) {
+                                            if (sniffedMediaUrl != reqUrl && !com.example.util.VideoLinkCompatibility.isAdVideoUrl(reqUrl)) {
+                                                post {
+                                                    sniffedMediaUrl = reqUrl
+                                                    sniffedMimeType = com.example.util.VideoLinkCompatibility.resolveMimeType(reqUrl)
+                                                }
+                                            }
+                                            return super.shouldInterceptRequest(view, request)
+                                        }
+
+                                        // Block ad domains only for movies/series when NOT a media stream
+                                        if (isMovieOrSeries && com.example.util.AdBlocker.isAd(reqUrl)) {
+                                            return com.example.util.AdBlocker.createEmptyResource()
+                                        }
+
+                                        return super.shouldInterceptRequest(view, request)
+                                    }
+
                                     override fun shouldOverrideUrlLoading(
                                         view: WebView?,
                                         request: android.webkit.WebResourceRequest?
@@ -426,6 +771,10 @@ fun PlayerScreen(
                                         val reqUrl = request?.url?.toString() ?: return false
                                         // Block intrusive redirects and store schemes
                                         if (reqUrl.startsWith("intent:") || reqUrl.startsWith("market:") || reqUrl.startsWith("whatsapp:") || reqUrl.startsWith("tg:") || reqUrl.startsWith("mailto:") || reqUrl.startsWith("tel:")) {
+                                            return true
+                                        }
+                                        // Block ad redirects for movies and series
+                                        if (isMovieOrSeries && com.example.util.AdBlocker.isAd(reqUrl)) {
                                             return true
                                         }
                                         return false
@@ -443,8 +792,58 @@ fun PlayerScreen(
                                         try {
                                             view?.evaluateJavascript("""
                                                 (function() {
-                                                    var playBtns = document.querySelectorAll('.play-btn, .vjs-big-play-button, #play-button, .jw-display-icon-container, [aria-label="Play"], .plyr__control--overlaid');
-                                                    playBtns.forEach(function(btn) { try { btn.click(); } catch(e){} });
+                                                    try {
+                                                        var playBtns = document.querySelectorAll('.play-btn, .vjs-big-play-button, #play-button, .jw-display-icon-container, [aria-label="Play"], .plyr__control--overlaid');
+                                                        playBtns.forEach(function(btn) { try { btn.click(); } catch(e){} });
+
+                                                        function hookVideos() {
+                                                            var vids = document.querySelectorAll('video');
+                                                            for (var i = 0; i < vids.length; i++) {
+                                                                var v = vids[i];
+                                                                var videoSrc = v.currentSrc || v.src;
+                                                                if (videoSrc && videoSrc.indexOf('http') === 0 && window.AndroidBridge) {
+                                                                    window.AndroidBridge.onMediaFound(videoSrc, v.type || '');
+                                                                }
+                                                                var sources = v.querySelectorAll('source');
+                                                                for (var s = 0; s < sources.length; s++) {
+                                                                    var sUrl = sources[s].src;
+                                                                    if (sUrl && sUrl.indexOf('http') === 0 && window.AndroidBridge) {
+                                                                        window.AndroidBridge.onMediaFound(sUrl, sources[s].type || '');
+                                                                    }
+                                                                }
+                                                                if (!v.__androidBridgeHooked) {
+                                                                    v.__androidBridgeHooked = true;
+                                                                    v.addEventListener('timeupdate', function() {
+                                                                        if (window.AndroidBridge && !isNaN(this.duration) && this.duration > 0) {
+                                                                            window.AndroidBridge.onVideoProgress(this.currentTime, this.duration);
+                                                                        }
+                                                                    });
+                                                                    v.addEventListener('ended', function() {
+                                                                        if (window.AndroidBridge) {
+                                                                            window.AndroidBridge.onVideoEnded();
+                                                                        }
+                                                                    });
+                                                                    v.addEventListener('play', function() {
+                                                                        if (window.AndroidBridge) {
+                                                                            window.AndroidBridge.onVideoPlayState(true);
+                                                                        }
+                                                                    });
+                                                                    v.addEventListener('pause', function() {
+                                                                        if (window.AndroidBridge) {
+                                                                            window.AndroidBridge.onVideoPlayState(false);
+                                                                        }
+                                                                    });
+                                                                }
+                                                                if (window.AndroidBridge && !isNaN(v.duration) && v.duration > 0 && !v.paused) {
+                                                                    window.AndroidBridge.onVideoProgress(v.currentTime, v.duration);
+                                                                }
+                                                            }
+                                                        }
+                                                        hookVideos();
+                                                        if (!window.__androidBridgeWatcher) {
+                                                            window.__androidBridgeWatcher = setInterval(hookVideos, 1000);
+                                                        }
+                                                    } catch(e) {}
                                                 })();
                                             """.trimIndent(), null)
                                         } catch (_: Exception) {}
@@ -511,6 +910,16 @@ fun PlayerScreen(
                                             <script>
                                                 var video = document.getElementById('webPlayer');
                                                 var sourceUrl = '$targetStream';
+                                                video.addEventListener('timeupdate', function() {
+                                                    if (window.AndroidBridge && !isNaN(video.duration) && video.duration > 0) {
+                                                        window.AndroidBridge.onVideoProgress(video.currentTime, video.duration);
+                                                    }
+                                                });
+                                                video.addEventListener('ended', function() {
+                                                    if (window.AndroidBridge) {
+                                                        window.AndroidBridge.onVideoEnded();
+                                                    }
+                                                });
                                                 if (Hls.isSupported()) {
                                                     var hls = new Hls({ enableWorker: true, lowLatencyMode: true });
                                                     hls.loadSource(sourceUrl);
@@ -586,21 +995,35 @@ fun PlayerScreen(
                                 webView.removeAllViews()
                                 webView.destroy()
                             } catch (_: Exception) {}
+                            if (webViewInstance === webView) {
+                                webViewInstance = null
+                            }
                         }
                     )
                 }
+            }
 
-                if (isWebViewLoading && !isWebViewError) {
+                if ((isWebViewLoading || isHiddenSniffing) && !isWebViewError) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(Color.Black.copy(alpha = 0.4f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator(
-                            color = StadiumGreenPrimary,
-                            modifier = Modifier.size(48.dp)
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(
+                                color = StadiumGreenPrimary,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            if (isHiddenSniffing) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    text = "Extraindo vídeo do servidor...",
+                                    color = Color.White,
+                                    fontSize = 14.sp
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -648,9 +1071,9 @@ fun PlayerScreen(
                                 ) {
                                      Button(
                                         onClick = {
-                                            isWebViewError = false
+                                            webViewReloadKey++
                                             isWebViewLoading = true
-                                            webViewInstance?.reload()
+                                            isWebViewError = false
                                         },
                                         colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
                                         shape = RoundedCornerShape(12.dp)
@@ -695,35 +1118,6 @@ fun PlayerScreen(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Refresh / Reload stream
-                        IconButton(
-                            onClick = { 
-                                isWebViewLoading = true
-                                webViewInstance?.reload() 
-                            },
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.6f))
-                                .testTag("webview_reload_btn")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Recarregar",
-                                tint = Color.White
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        // Web Video Caster
-                        WebVideoCasterButton(
-                            streamUrl = activeEmbedUrl.ifBlank { video.streamUrl },
-                            title = video.title
-                        )
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
                         IconButton(
                             onClick = { toggleFullscreen() },
                             modifier = Modifier
@@ -741,78 +1135,103 @@ fun PlayerScreen(
 
                         Spacer(modifier = Modifier.width(6.dp))
 
-                        // Collapsible options menu in both portrait and landscape
-                        if (!areExtraActionsExpanded) {
-                            Surface(
-                                color = Color.Black.copy(alpha = 0.65f),
-                                shape = RoundedCornerShape(20.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                        Box {
+                            IconButton(
+                                onClick = { areExtraActionsExpanded = true },
                                 modifier = Modifier
-                                    .clickable { areExtraActionsExpanded = true }
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.6f))
                                     .testTag("btn_expand_webview_options")
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Tune,
-                                        contentDescription = "Opções do Player",
-                                        tint = StadiumGreenPrimary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "Mais opções",
+                                    tint = Color.White
+                                )
                             }
-                        } else {
-                            AnimatedVisibility(
-                                visible = areExtraActionsExpanded,
-                                enter = fadeIn() + expandHorizontally(),
-                                exit = fadeOut() + shrinkHorizontally()
+                            
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = areExtraActionsExpanded,
+                                onDismissRequest = { areExtraActionsExpanded = false },
+                                modifier = Modifier.background(Color(0xFF13111C))
                             ) {
-                                Surface(
-                                    color = Color.Black.copy(alpha = 0.85f),
-                                    shape = RoundedCornerShape(20.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.5f)),
-                                    modifier = Modifier.padding(start = 4.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        ChromecastButton(castUiState = castUiState)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        WebVideoCasterButton(streamUrl = activeEmbedUrl.ifBlank { video.streamUrl }, title = video.title)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Button(
-                                            onClick = { 
-                                                areExtraActionsExpanded = false
-                                                useWebviewPlayer = false 
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
-                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            modifier = Modifier.height(34.dp).testTag("btn_switch_native_player")
-                                        ) {
-                                            Text("Nativo", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        IconButton(
-                                            onClick = { areExtraActionsExpanded = false },
-                                            modifier = Modifier.size(30.dp).testTag("btn_collapse_webview_options")
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Close,
-                                                contentDescription = "Recolher Opções",
-                                                tint = Color.White.copy(alpha = 0.8f),
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Recarregar", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White) },
+                                    onClick = {
+                                        areExtraActionsExpanded = false
+                                        isWebViewLoading = true
+                                        webViewInstance?.reload()
+                                    }
+                                )
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Player Nativo", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.Default.SmartDisplay, contentDescription = null, tint = Color.White) },
+                                    onClick = {
+                                        areExtraActionsExpanded = false
+                                        useWebviewPlayer = false 
+                                    }
+                                )
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Web Video Caster", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.Default.Cast, contentDescription = null, tint = Color(0xFF1E88E5)) },
+                                    onClick = {
+                                        areExtraActionsExpanded = false
+                                        launchWebVideoCaster(context, targetCastUrl, video.title)
+                                    }
+                                )
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (castUiState.isConnected) "TV Conectada: ${castUiState.deviceName ?: "Cast"}" else "Transmitir (Cast)",
+                                            color = if (castUiState.isConnected) StadiumCyanSecondary else Color.White
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (castUiState.isConnected) Icons.Default.CastConnected else Icons.Default.Cast,
+                                            contentDescription = null,
+                                            tint = if (castUiState.isConnected) StadiumCyanSecondary else Color.White
+                                        )
+                                    },
+                                    onClick = {
+                                        areExtraActionsExpanded = false
+                                        if (castUiState.isConnected) {
+                                            onCastToggle()
+                                        } else {
+                                            val triggered = mediaRouteButtonRef?.performClick() ?: false
+                                            if (!triggered) {
+                                                onCastVideo(targetCastUrl)
+                                            }
                                         }
                                     }
-                                }
+                                )
                             }
                         }
                     }
                 }
 
+
+
+                // Floating Next Episode Overlay for Web Player
+                AnimatedVisibility(
+                    visible = isEpisodeEnding,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 16.dp)
+                        .widthIn(max = 520.dp)
+                ) {
+                    NextEpisodeBannerCard(
+                        nextEpisodeTitle = nextEpisodeTitle,
+                        isPlaybackEnded = isPlaybackEnded,
+                        onPlayNextEpisode = onPlayNextEpisode,
+                        onDismiss = { isNextEpisodeDismissed = true }
+                    )
+                }
             }
         } else {
             // ==========================================
@@ -828,23 +1247,36 @@ fun PlayerScreen(
                         showControls = !showControls
                     }
             ) {
-                // ExoPlayer Surface View
+                // ExoPlayer Texture / Surface View
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
-                        val view = android.view.LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null)
-                        view.findViewById<PlayerView>(R.id.player_view).apply {
-                            player = exoPlayer
-                            useController = false
-                            this.resizeMode = resizeMode
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
+                        try {
+                            val view = android.view.LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null, false) as PlayerView
+                            view.apply {
+                                player = exoPlayer
+                                useController = false
+                                this.resizeMode = resizeMode
+                                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                            }
+                        } catch (_: Exception) {
+                            PlayerView(ctx).apply {
+                                player = exoPlayer
+                                useController = false
+                                this.resizeMode = resizeMode
+                                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                layoutParams = ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                            }
                         }
                     },
-                    update = { view ->
-                        val playerView = view.findViewById<PlayerView>(R.id.player_view)
+                    update = { playerView ->
                         playerView.player = exoPlayer
                         playerView.resizeMode = resizeMode
                     }
@@ -1011,133 +1443,93 @@ fun PlayerScreen(
 
                                 Spacer(modifier = Modifier.width(8.dp))
 
-                                // Collapsible options menu in both portrait and landscape
-                                if (!areExtraActionsExpanded) {
-                                    Surface(
-                                        color = Color.Black.copy(alpha = 0.65f),
-                                        shape = RoundedCornerShape(20.dp),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                                Box {
+                                    IconButton(
+                                        onClick = { areExtraActionsExpanded = true },
                                         modifier = Modifier
-                                            .clickable { areExtraActionsExpanded = true }
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.Black.copy(alpha = 0.5f))
                                             .testTag("btn_expand_player_options")
                                     ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Tune,
-                                                contentDescription = "Opções do Player",
-                                                tint = StadiumGreenPrimary,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "Opções",
-                                                color = Color.White,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        }
+                                        Icon(
+                                            imageVector = Icons.Default.MoreVert,
+                                            contentDescription = "Mais opções",
+                                            tint = Color.White
+                                        )
                                     }
-                                } else {
-                                    AnimatedVisibility(
-                                        visible = areExtraActionsExpanded,
-                                        enter = fadeIn() + expandHorizontally(),
-                                        exit = fadeOut() + shrinkHorizontally()
+
+                                    androidx.compose.material3.DropdownMenu(
+                                        expanded = areExtraActionsExpanded,
+                                        onDismissRequest = { areExtraActionsExpanded = false },
+                                        modifier = Modifier.background(Color(0xFF13111C))
                                     ) {
-                                        Surface(
-                                            color = Color.Black.copy(alpha = 0.85f),
-                                            shape = RoundedCornerShape(20.dp),
-                                            border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.5f)),
-                                            modifier = Modifier.padding(start = 4.dp)
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                            ) {
-                                                // Transmitir (Chromecast)
-                                                ChromecastButton(
-                                                    castUiState = castUiState,
-                                                    onCastConnectedClick = { onCastToggle() }
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                WebVideoCasterButton(streamUrl = video.streamUrl.ifBlank { video.embedUrl ?: "" }, title = video.title)
-                                                Spacer(modifier = Modifier.width(6.dp))
-
-                                                // Formato de Tela (Aspect ratio)
-                                                IconButton(
-                                                    onClick = {
-                                                        resizeMode = when (resizeMode) {
-                                                            AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                                                            else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                                        }
-                                                    },
-                                                    modifier = Modifier.size(36.dp).testTag("btn_aspect_ratio")
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.AspectRatio,
-                                                        contentDescription = "Formato de Tela",
-                                                        tint = Color.White
-                                                    )
-                                                }
-
-                                                // Usar Player Web
-                                                if (!video.embedUrl.isNullOrBlank() || video.streamUrl.isNotBlank()) {
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Button(
-                                                        onClick = { 
-                                                            areExtraActionsExpanded = false
-                                                            useWebviewPlayer = true 
-                                                        },
-                                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                                        modifier = Modifier.height(34.dp).testTag("btn_switch_web_player")
-                                                    ) {
-                                                        Icon(
-                                                            Icons.Default.Language,
-                                                            contentDescription = null,
-                                                            modifier = Modifier.size(16.dp),
-                                                            tint = Color.White
-                                                        )
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("Player Web", color = Color.White, fontSize = 12.sp)
-                                                    }
-                                                }
-
-                                                // Recarregar Stream
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                IconButton(
-                                                    onClick = {
-                                                        errorMessage = null
-                                                        exoPlayer?.prepare()
-                                                        exoPlayer?.play()
-                                                    },
-                                                    modifier = Modifier.size(36.dp).testTag("btn_reload_stream")
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Refresh,
-                                                        contentDescription = "Recarregar Transmissão",
-                                                        tint = Color.White
-                                                    )
-                                                }
-
-                                                // Botão Recolher Opções
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                IconButton(
-                                                    onClick = { areExtraActionsExpanded = false },
-                                                    modifier = Modifier.size(30.dp).testTag("btn_collapse_player_options")
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Close,
-                                                        contentDescription = "Recolher Opções",
-                                                        tint = Color.White.copy(alpha = 0.8f),
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
+                                        androidx.compose.material3.DropdownMenuItem(
+                                            text = { Text("Recarregar", color = Color.White) },
+                                            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White) },
+                                            onClick = {
+                                                areExtraActionsExpanded = false
+                                                errorMessage = null
+                                                exoPlayer?.prepare()
+                                                exoPlayer?.play()
+                                            }
+                                        )
+                                        androidx.compose.material3.DropdownMenuItem(
+                                            text = { Text("Formato de Tela", color = Color.White) },
+                                            leadingIcon = { Icon(Icons.Default.AspectRatio, contentDescription = null, tint = Color.White) },
+                                            onClick = {
+                                                areExtraActionsExpanded = false
+                                                resizeMode = when (resizeMode) {
+                                                    AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                                                 }
                                             }
+                                        )
+                                        if (!video.embedUrl.isNullOrBlank() || video.streamUrl.isNotBlank()) {
+                                            androidx.compose.material3.DropdownMenuItem(
+                                                text = { Text("Player Web", color = Color.White) },
+                                                leadingIcon = { Icon(Icons.Default.Language, contentDescription = null, tint = Color.White) },
+                                                onClick = {
+                                                    areExtraActionsExpanded = false
+                                                    useWebviewPlayer = true 
+                                                }
+                                            )
                                         }
+                                        androidx.compose.material3.DropdownMenuItem(
+                                            text = { Text("Web Video Caster", color = Color.White) },
+                                            leadingIcon = { Icon(Icons.Default.Cast, contentDescription = null, tint = Color(0xFF1E88E5)) },
+                                            onClick = {
+                                                areExtraActionsExpanded = false
+                                                launchWebVideoCaster(context, targetCastUrl, video.title)
+                                            }
+                                        )
+                                        androidx.compose.material3.DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    if (castUiState.isConnected) "TV Conectada: ${castUiState.deviceName ?: "Cast"}" else "Transmitir (Cast)",
+                                                    color = if (castUiState.isConnected) StadiumCyanSecondary else Color.White
+                                                )
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = if (castUiState.isConnected) Icons.Default.CastConnected else Icons.Default.Cast,
+                                                    contentDescription = null,
+                                                    tint = if (castUiState.isConnected) StadiumCyanSecondary else Color.White
+                                                )
+                                            },
+                                            onClick = {
+                                                areExtraActionsExpanded = false
+                                                if (castUiState.isConnected) {
+                                                    onCastToggle()
+                                                } else {
+                                                    val triggered = mediaRouteButtonRef?.performClick() ?: false
+                                                    if (!triggered) {
+                                                        onCastVideo(targetCastUrl)
+                                                    }
+                                                }
+                                            }
+                                        )
                                     }
                                 }
                             }
@@ -1219,6 +1611,19 @@ fun PlayerScreen(
                                 .navigationBarsPadding()
                                 .padding(horizontal = 16.dp, vertical = 12.dp)
                         ) {
+                            // Bottom Next Episode Banner - appears at the end of the episode
+                            if (isEpisodeEnding) {
+                                NextEpisodeBannerCard(
+                                    nextEpisodeTitle = nextEpisodeTitle,
+                                    isPlaybackEnded = isPlaybackEnded,
+                                    onPlayNextEpisode = onPlayNextEpisode,
+                                    onDismiss = { isNextEpisodeDismissed = true },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 10.dp)
+                                )
+                            }
+
                             // Progress bar (if not live or has duration)
                             if (durationMs > 0) {
                                 Row(
@@ -1300,6 +1705,25 @@ fun PlayerScreen(
                         }
                     }
                 }
+
+                // Floating Next Episode Overlay for Native Player when controls are hidden
+                AnimatedVisibility(
+                    visible = isEpisodeEnding && !showControls,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 16.dp)
+                        .widthIn(max = 520.dp)
+                ) {
+                    NextEpisodeBannerCard(
+                        nextEpisodeTitle = nextEpisodeTitle,
+                        isPlaybackEnded = isPlaybackEnded,
+                        onPlayNextEpisode = onPlayNextEpisode,
+                        onDismiss = { isNextEpisodeDismissed = true }
+                    )
+                }
             }
         }
     }
@@ -1309,11 +1733,22 @@ fun PlayerScreen(
 fun CastPlaybackHub(
     video: PlayableVideo,
     castUiState: CastUiState,
+    streamUrl: String = video.streamUrl.ifBlank { video.embedUrl ?: "" },
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
     onTogglePlayPause: () -> Unit,
+    onSeekCast: (Long) -> Unit = {},
+    onSeekCastForward: () -> Unit = {},
+    onSeekCastBackward: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    var isSeeking by remember { mutableStateOf(false) }
+    var sliderValue by remember { mutableFloatStateOf(0f) }
+
+    val currentPosMs = if (isSeeking) sliderValue.toLong() else castUiState.streamPositionMs
+    val totalDurationMs = castUiState.streamDurationMs
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -1328,7 +1763,7 @@ fun CastPlaybackHub(
             )
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(24.dp)
+            .padding(20.dp)
             .testTag("cast_playback_hub")
     ) {
         Column(
@@ -1356,19 +1791,21 @@ fun CastPlaybackHub(
                     )
                 }
 
-                ChromecastButton(castUiState = castUiState)
-                Spacer(modifier = Modifier.width(8.dp))
-                WebVideoCasterButton(streamUrl = video.streamUrl.ifBlank { video.embedUrl ?: "" }, title = video.title)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ChromecastButton(castUiState = castUiState)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    WebVideoCasterButton(streamUrl = streamUrl, title = video.title)
+                }
             }
 
             // Center Visualizer & Media Info
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(vertical = 24.dp)
+                modifier = Modifier.padding(vertical = 12.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(120.dp)
+                        .size(100.dp)
                         .clip(CircleShape)
                         .background(
                             Brush.linearGradient(
@@ -1384,16 +1821,16 @@ fun CastPlaybackHub(
                         imageVector = Icons.Default.Tv,
                         contentDescription = null,
                         tint = StadiumCyanSecondary,
-                        modifier = Modifier.size(60.dp)
+                        modifier = Modifier.size(50.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Surface(
                     color = StadiumGreenPrimary.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(16.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f))
+                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f))
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1415,7 +1852,7 @@ fun CastPlaybackHub(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
                     text = video.title,
@@ -1425,7 +1862,7 @@ fun CastPlaybackHub(
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
                     text = video.subtitle,
@@ -1434,7 +1871,7 @@ fun CastPlaybackHub(
                 )
             }
 
-            // Remote Controls
+            // Remote Controls Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -1446,11 +1883,67 @@ fun CastPlaybackHub(
                     modifier = Modifier.padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Slider if duration > 0 or VOD
+                    if (totalDurationMs > 0) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                            Slider(
+                                value = if (isSeeking) sliderValue else castUiState.streamPositionMs.toFloat(),
+                                onValueChange = {
+                                    isSeeking = true
+                                    sliderValue = it
+                                },
+                                onValueChangeFinished = {
+                                    onSeekCast(sliderValue.toLong())
+                                    isSeeking = false
+                                },
+                                valueRange = 0f..totalDurationMs.toFloat().coerceAtLeast(1f),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = StadiumGreenPrimary,
+                                    activeTrackColor = StadiumGreenPrimary,
+                                    inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                                )
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = formatTime(currentPosMs),
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                                Text(
+                                    text = formatTime(totalDurationMs),
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+
+                    // Transport controls row: Rewind - Play/Pause - Forward
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Rewind 10s
+                        IconButton(
+                            onClick = onSeekCastBackward,
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.12f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Replay10,
+                                contentDescription = "Voltar 10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+
+                        // Play/Pause Main Button
                         IconButton(
                             onClick = onTogglePlayPause,
                             modifier = Modifier
@@ -1466,6 +1959,55 @@ fun CastPlaybackHub(
                             )
                         }
 
+                        // Forward 10s
+                        IconButton(
+                            onClick = onSeekCastForward,
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.12f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Forward10,
+                                contentDescription = "Avançar 10s",
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Secondary Action Buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Web Video Caster launcher
+                        OutlinedButton(
+                            onClick = {
+                                launchWebVideoCaster(
+                                    context = context,
+                                    url = streamUrl,
+                                    title = video.title
+                                )
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = StadiumCyanSecondary
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Cast,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Web Video Caster", fontSize = 12.sp)
+                        }
+
+                        // Disconnect Cast
                         OutlinedButton(
                             onClick = onDisconnect,
                             shape = RoundedCornerShape(12.dp),
@@ -1479,7 +2021,7 @@ fun CastPlaybackHub(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Desconectar Cast")
+                            Text("Desconectar", fontSize = 12.sp)
                         }
                     }
                 }
@@ -1493,4 +2035,136 @@ private fun formatTime(millis: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format("%02d:%02d", minutes, seconds)
+}
+
+@Composable
+private fun UnavailablePlaybackScreen(
+    video: PlayableVideo,
+    onBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        // Fallback test card image
+        AsyncImage(
+            model = OFFLINE_FALLBACK_URL,
+            contentDescription = "Canal Fora do Ar",
+            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Semi-transparent dark overlay for readability
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.45f))
+        )
+
+        // Top bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                    .size(44.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Voltar",
+                    tint = Color.White
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = video.title,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                if (video.subtitle.isNotBlank()) {
+                    Text(
+                        text = video.subtitle,
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+            Surface(
+                color = Color(0xFFE53935),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = "INDISPONÍVEL",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        // Bottom notice card
+        Card(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(20.dp)
+                .widthIn(max = 480.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xEE1E232A)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.TvOff,
+                        contentDescription = null,
+                        tint = Color(0xFFEF5350),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "Transmissão Temporariamente Indisponível",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Este canal ou título está indisponível no momento. O link padrão de fora do ar foi configurado enquanto o sistema busca novos sinais operacionais.",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 13.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Voltar", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
 }

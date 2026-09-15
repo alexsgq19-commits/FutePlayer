@@ -157,7 +157,8 @@ class CastManager private constructor(context: Context) {
         subtitle: String,
         streamUrl: String,
         posterUrl: String? = null,
-        isLive: Boolean = true
+        isLive: Boolean = true,
+        headers: Map<String, String>? = null
     ) {
         val session = currentSession ?: return
         val rmc = session.remoteMediaClient ?: return
@@ -173,25 +174,42 @@ class CastManager private constructor(context: Context) {
                 }
             }
 
-            val contentType = if (streamUrl.contains(".m3u8", ignoreCase = true)) {
-                "application/x-mpegurl"
-            } else if (streamUrl.contains(".mpd", ignoreCase = true)) {
-                "application/dash+xml"
-            } else {
-                "video/mp4"
+            val resolvedMime = com.example.util.VideoLinkCompatibility.resolveMimeType(streamUrl)
+            val contentType = when {
+                resolvedMime != null -> resolvedMime
+                streamUrl.contains(".m3u8", ignoreCase = true) || isLive -> "application/x-mpegurl"
+                streamUrl.contains(".mpd", ignoreCase = true) -> "application/dash+xml"
+                else -> "video/mp4"
             }
 
             val streamType = if (isLive) MediaInfo.STREAM_TYPE_LIVE else MediaInfo.STREAM_TYPE_BUFFERED
+
+            val customDataJson = org.json.JSONObject().apply {
+                val headersObj = org.json.JSONObject()
+                headers?.forEach { (k, v) ->
+                    headersObj.put(k, v)
+                }
+                if (!headersObj.has("Referer")) {
+                    headersObj.put("Referer", "https://futemais.link/")
+                }
+                if (!headersObj.has("User-Agent")) {
+                    headersObj.put("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                }
+                put("com.google.android.gms.cast.metadata.HTTP_HEADERS", headersObj)
+                put("httpHeaders", headersObj)
+            }
 
             val mediaInfo = MediaInfo.Builder(streamUrl)
                 .setStreamType(streamType)
                 .setContentType(contentType)
                 .setMetadata(metadata)
+                .setCustomData(customDataJson)
                 .build()
 
             val request = MediaLoadRequestData.Builder()
                 .setMediaInfo(mediaInfo)
                 .setAutoplay(true)
+                .setCustomData(customDataJson)
                 .build()
 
             rmc.load(request)
@@ -205,6 +223,31 @@ class CastManager private constructor(context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error casting media: ${e.message}", e)
         }
+    }
+
+    fun seekTo(positionMs: Long) {
+        val rmc = currentSession?.remoteMediaClient ?: return
+        try {
+            rmc.seek(positionMs)
+            _castUiState.value = _castUiState.value.copy(streamPositionMs = positionMs)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error seeking: ${e.message}")
+        }
+    }
+
+    fun seekForward(offsetMs: Long = 10_000L) {
+        val rmc = currentSession?.remoteMediaClient ?: return
+        val currentPos = rmc.approximateStreamPosition
+        val duration = rmc.streamDuration
+        val targetPos = if (duration > 0) (currentPos + offsetMs).coerceAtMost(duration) else currentPos + offsetMs
+        seekTo(targetPos)
+    }
+
+    fun seekBackward(offsetMs: Long = 10_000L) {
+        val rmc = currentSession?.remoteMediaClient ?: return
+        val currentPos = rmc.approximateStreamPosition
+        val targetPos = (currentPos - offsetMs).coerceAtLeast(0L)
+        seekTo(targetPos)
     }
 
     fun togglePlayPause() {

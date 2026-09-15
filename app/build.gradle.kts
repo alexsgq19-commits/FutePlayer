@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.futeplayer.vtwq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.0.5"
+    versionCode = 7
+    versionName = "1.1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -102,6 +102,7 @@ dependencies {
   implementation(libs.androidx.appcompat)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.exoplayer.hls)
+  implementation(libs.androidx.media3.exoplayer.dash)
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.cast)
   implementation(libs.androidx.media3.session)

@@ -212,6 +212,40 @@ class AppNotificationManager(private val context: Context) {
         } catch (_: SecurityException) {}
     }
 
+    fun showCustomNotification(title: String, message: String) {
+        if (!hasNotificationPermission()) return
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            "custom_notification".hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_CHANNELS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(message)
+            )
+            .setColor(0xFF00E676.toInt())
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(context).notify(System.currentTimeMillis().hashCode(), notification)
+        } catch (_: SecurityException) {}
+    }
+
     fun showAdminChannelAlertNotification(
         title: String,
         message: String,

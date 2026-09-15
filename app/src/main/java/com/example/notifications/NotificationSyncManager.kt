@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.SystemClock
 import com.example.data.FutemaisRepository
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +48,14 @@ class NotificationSyncManager(private val context: Context) {
             }
         }
 
+        repository.syncCustomNotificationsFromFirestore { title, message, timestamp ->
+            val lastNotifiedTimestamp = sharedPrefs.getLong("last_custom_notified_timestamp", 0L)
+            if (timestamp > lastNotifiedTimestamp) {
+                notificationManager.showCustomNotification(title, message)
+                sharedPrefs.edit().putLong("last_custom_notified_timestamp", timestamp).apply()
+            }
+        }
+
         repository.syncFromFirestore {
             checkNewChannelsAndNotify()
         }
@@ -54,10 +63,27 @@ class NotificationSyncManager(private val context: Context) {
 
     fun checkAllUpdates() {
         scope.launch {
-            try {
-                checkNewMatchesAndNotify()
-                checkNewChannelsAndNotify()
-            } catch (_: Exception) {}
+            checkAllUpdatesSync()
+        }
+    }
+
+    suspend fun checkAllUpdatesSync() {
+        try {
+            checkNewMatchesAndNotify()
+            checkNewChannelsAndNotify()
+            checkCustomNotificationsAndNotify()
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun checkCustomNotificationsAndNotify() {
+        val result = repository.fetchLatestCustomNotification()
+        if (result != null) {
+            val (title, message, timestamp) = result
+            val lastNotifiedTimestamp = sharedPrefs.getLong("last_custom_notified_timestamp", 0L)
+            if (timestamp > lastNotifiedTimestamp) {
+                notificationManager.showCustomNotification(title, message)
+                sharedPrefs.edit().putLong("last_custom_notified_timestamp", timestamp).apply()
+            }
         }
     }
 
@@ -135,12 +161,20 @@ class NotificationSyncManager(private val context: Context) {
             val intervalMs = 15 * 60 * 1000L // 15 minutes
             val triggerAtMs = SystemClock.elapsedRealtime() + intervalMs
 
-            alarmManager.setInexactRepeating(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                triggerAtMs,
-                intervalMs,
-                pendingIntent
-            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAtMs,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setInexactRepeating(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAtMs,
+                    intervalMs,
+                    pendingIntent
+                )
+            }
         } catch (_: Exception) {}
     }
 }

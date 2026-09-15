@@ -44,38 +44,82 @@ import com.example.ui.theme.StadiumCyanSecondary
 import com.example.ui.theme.StadiumGreenPrimary
 import com.google.android.gms.cast.framework.CastButtonFactory
 
-fun launchWebVideoCaster(context: android.content.Context, url: String, title: String) {
-    try {
-        val targetUrl = if (url.isNotBlank()) url.trim() else ""
-        if (targetUrl.isBlank()) return
-        val isDirectStream = targetUrl.contains(".m3u8", ignoreCase = true) ||
-                             targetUrl.contains(".mp4", ignoreCase = true) ||
-                             targetUrl.contains(".ts", ignoreCase = true) ||
-                             targetUrl.contains(".mkv", ignoreCase = true)
+fun launchWebVideoCaster(
+    context: android.content.Context,
+    url: String,
+    title: String,
+    poster: String? = null,
+    headers: Map<String, String>? = null
+) {
+    val targetUrl = if (url.isNotBlank()) url.trim() else ""
+    if (targetUrl.isBlank() || com.example.util.VideoLinkCompatibility.isAdVideoUrl(targetUrl)) {
+        android.widget.Toast.makeText(context, "Nenhum link de vídeo válido disponível para transmitir.", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
 
-        val intent = Intent(Intent.ACTION_VIEW).apply {
+    try {
+        val uri = Uri.parse(targetUrl)
+        val isDirectStream = com.example.util.VideoLinkCompatibility.isDirectMediaStream(targetUrl)
+        val mimeType = com.example.util.VideoLinkCompatibility.resolveMimeType(targetUrl) ?: "video/*"
+
+        // Build header bundle/strings for Web Video Caster
+        val headerMap = com.example.util.VideoLinkCompatibility.buildWvcHeaders(targetUrl, null, headers)
+        val headerStrings = headerMap.map { "${it.key}: ${it.value}" }.toTypedArray()
+
+        // Try Web Video Caster package directly
+        val wvcIntent = Intent(Intent.ACTION_VIEW).apply {
             setPackage("com.instantbits.cast.webvideo")
             if (isDirectStream) {
-                setDataAndType(Uri.parse(targetUrl), "video/*")
+                setDataAndType(uri, mimeType)
             } else {
-                data = Uri.parse(targetUrl)
+                data = uri
             }
             putExtra("title", title)
+            putExtra("video_title", title)
+            putExtra(Intent.EXTRA_TITLE, title)
             putExtra("secure_uri", targetUrl)
+            putExtra("video_url", targetUrl)
+            putExtra("videoUrl", targetUrl)
+            if (!poster.isNullOrBlank()) {
+                putExtra("poster", poster)
+            }
+            putExtra("headers", headerStrings)
+            putExtra("mime", mimeType)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        context.startActivity(wvcIntent)
     } catch (_: Exception) {
         try {
-            val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.instantbits.cast.webvideo")).apply {
+            // Fallback to general video intent chooser (supports Web Video Caster, VLC, MX Player, BubbleUPnP, Cast apps)
+            val mimeType = com.example.util.VideoLinkCompatibility.resolveMimeType(targetUrl) ?: "video/*"
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                if (com.example.util.VideoLinkCompatibility.isDirectMediaStream(targetUrl)) {
+                    setDataAndType(Uri.parse(targetUrl), mimeType)
+                } else {
+                    data = Uri.parse(targetUrl)
+                }
+                putExtra("title", title)
+                putExtra("video_title", title)
+                putExtra(Intent.EXTRA_TITLE, title)
+                putExtra("secure_uri", targetUrl)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(marketIntent)
+            val chooser = Intent.createChooser(intent, "Transmitir com Web Video Caster / Outros...").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
         } catch (_: Exception) {
-            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.instantbits.cast.webvideo")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.instantbits.cast.webvideo")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(marketIntent)
+            } catch (_: Exception) {
+                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.instantbits.cast.webvideo")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(webIntent)
             }
-            context.startActivity(webIntent)
         }
     }
 }
@@ -117,7 +161,8 @@ fun WebVideoCasterButton(
 fun ChromecastButton(
     castUiState: CastUiState,
     modifier: Modifier = Modifier,
-    onCastConnectedClick: () -> Unit = {}
+    onCastConnectedClick: () -> Unit = {},
+    onMediaRouteButtonCreated: ((MediaRouteButton) -> Unit)? = null
 ) {
     Box(
         modifier = modifier
@@ -141,7 +186,11 @@ fun ChromecastButton(
                     val themeWrapper = ContextThemeWrapper(context, androidx.appcompat.R.style.Theme_AppCompat_DayNight)
                     MediaRouteButton(themeWrapper).apply {
                         CastButtonFactory.setUpMediaRouteButton(context, this)
+                        onMediaRouteButtonCreated?.invoke(this)
                     }
+                },
+                update = { button ->
+                    onMediaRouteButtonCreated?.invoke(button)
                 }
             )
 

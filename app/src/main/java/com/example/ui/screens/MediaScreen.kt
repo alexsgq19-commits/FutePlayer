@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import com.example.util.tvFocusable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -9,14 +10,18 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,6 +42,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -51,6 +57,7 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Tv
@@ -59,6 +66,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -94,6 +102,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -124,11 +133,20 @@ fun MediaScreenContent(
     mediaList: List<MediaItem>,
     searchQuery: String,
     isAdmin: Boolean,
+    selectedMediaItem: MediaItem? = null,
+    selectedSeason: SeasonItem? = null,
+    selectedEpisode: EpisodeItem? = null,
+    onSelectMedia: (MediaItem?) -> Unit = {},
+    onDismissMedia: () -> Unit = {},
     onPlayMovie: (MediaItem) -> Unit,
     onPlayEpisode: (MediaItem, SeasonItem, EpisodeItem) -> Unit,
     onAddOrUpdateMedia: (MediaItem) -> Unit,
     onDeleteMedia: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    isTestingMovies: Boolean = false,
+    movieTestProgressText: String? = null,
+    onTestAllMovies: () -> Unit = {},
+    onOpenMoviesApi: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -138,6 +156,8 @@ fun MediaScreenContent(
     var showAddDialog by remember { mutableStateOf(false) }
     var mediaToDelete by remember { mutableStateOf<MediaItem?>(null) }
     var selectedMediaForDetail by remember { mutableStateOf<MediaItem?>(null) }
+
+    val activeMedia = selectedMediaItem ?: selectedMediaForDetail
 
     // Categories extraction
     val allCategories = remember(mediaList) {
@@ -163,6 +183,7 @@ fun MediaScreenContent(
                 "Filmes" -> item.type == MediaContentType.MOVIE
                 "Séries" -> item.type == MediaContentType.SERIES
                 "Favoritos" -> item.isFavorite
+                "🔴 Fora do Ar" -> !item.isWorking
                 else -> true
             }
 
@@ -180,7 +201,7 @@ fun MediaScreenContent(
             .fillMaxSize()
             .background(DarkBg)
     ) {
-        // Filter Chips Row (Type: Todos, Filmes, Séries, Favoritos)
+        // Filter Chips Row (Type: Todos, Filmes, Séries, Favoritos, Fora do Ar)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -189,12 +210,19 @@ fun MediaScreenContent(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val typeFilters = listOf(
-                "Todos" to null,
-                "Filmes" to Icons.Filled.Movie,
-                "Séries" to Icons.Filled.Tv,
-                "Favoritos" to Icons.Filled.Favorite
-            )
+            val typeFilters = remember(isAdmin, mediaList) {
+                val list = mutableListOf(
+                    "Todos" to null,
+                    "Filmes" to Icons.Filled.Movie,
+                    "Séries" to Icons.Filled.Tv,
+                    "Favoritos" to Icons.Filled.Favorite
+                )
+                if (isAdmin) {
+                    val offlineCount = mediaList.count { !it.isWorking }
+                    list.add("🔴 Fora do Ar" to Icons.Filled.Warning)
+                }
+                list
+            }
 
             typeFilters.forEach { (label, icon) ->
                 val isSelected = selectedTypeFilter == label
@@ -214,21 +242,37 @@ fun MediaScreenContent(
                                 imageVector = icon,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
-                                tint = if (isSelected) Color.Black else if (label == "Favoritos") NeonPink else NeonCyan
+                                tint = if (isSelected) {
+                                    if (label == "🔴 Fora do Ar") Color.White else Color.Black
+                                } else if (label == "Favoritos") {
+                                    NeonPink
+                                } else if (label == "🔴 Fora do Ar") {
+                                    Color(0xFFFF1744)
+                                } else {
+                                    NeonCyan
+                                }
                             )
                         }
                     } else null,
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = if (label == "Favoritos") NeonPink else NeonCyan,
-                        selectedLabelColor = Color.Black,
+                        selectedContainerColor = when (label) {
+                            "Favoritos" -> NeonPink
+                            "🔴 Fora do Ar" -> Color(0xFFFF1744)
+                            else -> NeonCyan
+                        },
+                        selectedLabelColor = if (label == "🔴 Fora do Ar") Color.White else Color.Black,
                         containerColor = DarkCardBg,
                         labelColor = Color.White.copy(alpha = 0.85f)
                     ),
                     border = FilterChipDefaults.filterChipBorder(
                         enabled = true,
                         selected = isSelected,
-                        borderColor = Color.White.copy(alpha = 0.15f),
-                        selectedBorderColor = if (label == "Favoritos") NeonPink else NeonCyan
+                        borderColor = if (label == "🔴 Fora do Ar") Color(0xFFFF1744).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.15f),
+                        selectedBorderColor = when (label) {
+                            "Favoritos" -> NeonPink
+                            "🔴 Fora do Ar" -> Color(0xFFFF1744)
+                            else -> NeonCyan
+                        }
                     ),
                     shape = RoundedCornerShape(20.dp)
                 )
@@ -302,29 +346,158 @@ fun MediaScreenContent(
             }
 
             if (isAdmin) {
-                Button(
-                    onClick = {
-                        mediaToEdit = null
-                        showAddDialog = true
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonGreen,
-                        contentColor = Color.Black
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                val offlineCount = remember(mediaList) { mediaList.count { !it.isWorking } }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = "Adicionar",
-                        modifier = Modifier.size(16.dp),
-                        tint = Color.Black
+                    if (offlineCount > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFFF1744).copy(alpha = 0.2f),
+                            border = BorderStroke(1.dp, Color(0xFFFF1744).copy(alpha = 0.6f)),
+                            modifier = Modifier.clickable {
+                                selectedTypeFilter = "🔴 Fora do Ar"
+                            }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFF1744))
+                                )
+                                Text(
+                                    text = "$offlineCount fora",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFFF5252)
+                                )
+                            }
+                        }
+                    }
+
+                    // Botão API de Filmes
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = NeonGreen.copy(alpha = 0.18f),
+                        border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .clickable {
+                                onOpenMoviesApi()
+                            }
+                            .testTag("btn_open_movies_api")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Link,
+                                contentDescription = "API de Filmes",
+                                tint = NeonGreen,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "API Filmes",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NeonGreen
+                            )
+                        }
+                    }
+
+                    // Botão Testar Filmes & Séries
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = NeonCyan.copy(alpha = 0.18f),
+                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .clickable(enabled = !isTestingMovies) {
+                                onTestAllMovies()
+                            }
+                            .testTag("btn_test_all_movies")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Movie,
+                                contentDescription = "Testar filmes e séries",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = if (isTestingMovies) "Testando..." else "Testar",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NeonCyan
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            mediaToEdit = null
+                            showAddDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NeonGreen,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = "Adicionar",
+                            modifier = Modifier.size(16.dp),
+                            tint = Color.Black
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Adicionar",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        if (isTestingMovies) {
+            Surface(
+                color = NeonGreen.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = NeonGreen
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Adicionar",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                        text = movieTestProgressText ?: "Testando filmes e séries (PobreFlix & TapeContent)...",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }
@@ -343,20 +516,21 @@ fun MediaScreenContent(
                     verticalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Movie,
+                        imageVector = if (selectedTypeFilter == "🔴 Fora do Ar") Icons.Default.CheckCircle else Icons.Filled.Movie,
                         contentDescription = null,
                         modifier = Modifier.size(64.dp),
-                        tint = Color.White.copy(alpha = 0.2f)
+                        tint = if (selectedTypeFilter == "🔴 Fora do Ar") Color(0xFF00E676).copy(alpha = 0.6f) else Color.White.copy(alpha = 0.2f)
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = if (searchQuery.isNotBlank()) "Nenhum filme ou série encontrado para '$searchQuery'"
+                        text = if (selectedTypeFilter == "🔴 Fora do Ar") "Nenhum filme ou série fora do ar no momento! Todos os títulos estão operacionais."
+                        else if (searchQuery.isNotBlank()) "Nenhum filme ou série encontrado para '$searchQuery'"
                         else "Nenhum filme ou série disponível nesta categoria.",
-                        color = Color.White.copy(alpha = 0.6f),
+                        color = Color.White.copy(alpha = 0.7f),
                         fontSize = 15.sp,
                         textAlign = TextAlign.Center
                     )
-                    if (isAdmin) {
+                    if (isAdmin && selectedTypeFilter != "🔴 Fora do Ar") {
                         Spacer(modifier = Modifier.height(20.dp))
                         Button(
                             onClick = {
@@ -390,12 +564,14 @@ fun MediaScreenContent(
                         isAdmin = isAdmin,
                         onClick = {
                             selectedMediaForDetail = item
+                            onSelectMedia(item)
                         },
                         onPlayClick = {
                             if (item.type == MediaContentType.MOVIE) {
                                 onPlayMovie(item)
                             } else {
                                 selectedMediaForDetail = item
+                                onSelectMedia(item)
                             }
                         },
                         onEditClick = {
@@ -407,6 +583,9 @@ fun MediaScreenContent(
                         },
                         onToggleFavorite = {
                             onToggleFavorite(item.id)
+                        },
+                        onToggleWorkingStatus = {
+                            onAddOrUpdateMedia(item.copy(isWorking = !item.isWorking))
                         }
                     )
                 }
@@ -415,13 +594,15 @@ fun MediaScreenContent(
     }
 
     // Modal Details (Movie or Series)
-    selectedMediaForDetail?.let { media ->
+    activeMedia?.let { media ->
         if (media.type == MediaContentType.MOVIE) {
             MovieDetailDialog(
                 movie = media,
-                onDismiss = { selectedMediaForDetail = null },
-                onPlay = {
+                onDismiss = {
                     selectedMediaForDetail = null
+                    onDismissMedia()
+                },
+                onPlay = {
                     onPlayMovie(media)
                 },
                 onToggleFavorite = { onToggleFavorite(media.id) }
@@ -429,9 +610,13 @@ fun MediaScreenContent(
         } else {
             SeriesDetailDialog(
                 series = media,
-                onDismiss = { selectedMediaForDetail = null },
-                onPlayEpisode = { season, episode ->
+                initialSeason = selectedSeason,
+                currentlyPlayingEpisode = selectedEpisode,
+                onDismiss = {
                     selectedMediaForDetail = null
+                    onDismissMedia()
+                },
+                onPlayEpisode = { season, episode ->
                     onPlayEpisode(media, season, episode)
                 },
                 onToggleFavorite = { onToggleFavorite(media.id) }
@@ -513,24 +698,28 @@ fun MediaCard(
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onToggleWorkingStatus: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val isOffline = !media.isWorking
+    val borderColor = if (isOffline) Color(0xFFFF1744)
+    else if (media.type == MediaContentType.SERIES) NeonPurple.copy(alpha = 0.35f)
+    else NeonCyan.copy(alpha = 0.35f)
+    val borderWidth = if (isOffline) 2.5.dp else 1.dp
+
     Card(
+        onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
+            .tvFocusable(RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))
-            .clickable { onClick() }
             .border(
-                BorderStroke(
-                    1.dp,
-                    if (media.type == MediaContentType.SERIES) NeonPurple.copy(alpha = 0.35f)
-                    else NeonCyan.copy(alpha = 0.35f)
-                ),
+                BorderStroke(borderWidth, borderColor),
                 RoundedCornerShape(16.dp)
             ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = DarkCardBg),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isOffline) 8.dp else 6.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // Poster Box
@@ -587,30 +776,60 @@ fun MediaCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Top
                 ) {
-                    // Type Badge
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                if (media.type == MediaContentType.MOVIE) NeonCyan.copy(alpha = 0.9f)
-                                else NeonPurple.copy(alpha = 0.9f)
-                            )
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    // Type Badge and Offline Badge
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (media.type == MediaContentType.MOVIE) Icons.Filled.Movie else Icons.Filled.Tv,
-                                contentDescription = null,
-                                tint = Color.Black,
-                                modifier = Modifier.size(11.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = if (media.type == MediaContentType.MOVIE) "FILME" else "SÉRIE",
-                                color = Color.Black,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (media.type == MediaContentType.MOVIE) NeonCyan.copy(alpha = 0.9f)
+                                    else NeonPurple.copy(alpha = 0.9f)
+                                )
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (media.type == MediaContentType.MOVIE) Icons.Filled.Movie else Icons.Filled.Tv,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = if (media.type == MediaContentType.MOVIE) "FILME" else "SÉRIE",
+                                    color = Color.Black,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+
+                        if (isOffline) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFFF1744))
+                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Warning,
+                                        contentDescription = "Fora do Ar",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "OFFLINE",
+                                        color = Color.White,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Black
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -692,13 +911,40 @@ fun MediaCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = media.category,
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = media.category,
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (isOffline) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFF1744))
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = "Fora do Ar",
+                                color = Color(0xFFFF5252),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -711,29 +957,40 @@ fun MediaCard(
                     Button(
                         onClick = { onPlayClick() },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (media.type == MediaContentType.MOVIE) NeonGreen else NeonPurple,
-                            contentColor = Color.Black
+                            containerColor = if (isOffline) Color(0xFFFF1744) else if (media.type == MediaContentType.MOVIE) NeonGreen else NeonPurple,
+                            contentColor = if (isOffline) Color.White else Color.Black
                         ),
                         shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.weight(1f).height(32.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = "Assistir",
-                            modifier = Modifier.size(16.dp),
-                            tint = Color.Black
+                            imageVector = if (isOffline) Icons.Filled.Warning else Icons.Filled.PlayArrow,
+                            contentDescription = if (isOffline) "Fora do Ar" else "Assistir",
+                            modifier = Modifier.size(15.dp),
+                            tint = if (isOffline) Color.White else Color.Black
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (media.type == MediaContentType.MOVIE) "Assistir" else "Episódios",
+                            text = if (isOffline) "Indisponível" else if (media.type == MediaContentType.MOVIE) "Assistir" else "Episódios",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
 
                     if (isAdmin) {
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(
+                            onClick = { onToggleWorkingStatus() },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (media.isWorking) Icons.Default.CheckCircle else Icons.Default.Close,
+                                contentDescription = if (media.isWorking) "Marcar como Fora do Ar" else "Marcar como Funcionando",
+                                tint = if (media.isWorking) Color(0xFF00E676) else Color(0xFFFF1744),
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
                         IconButton(
                             onClick = { onEditClick() },
                             modifier = Modifier.size(32.dp)
@@ -774,6 +1031,9 @@ fun MovieDetailDialog(
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
+    val isOffline = !movie.isWorking
+    val dialogScrollState = rememberScrollState()
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)
@@ -781,185 +1041,255 @@ fun MovieDetailDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
+                .fillMaxHeight(0.88f)
                 .clip(RoundedCornerShape(24.dp))
-                .border(1.dp, NeonCyan.copy(alpha = 0.4f), RoundedCornerShape(24.dp)),
+                .border(
+                    BorderStroke(
+                        if (isOffline) 2.5.dp else 1.dp,
+                        if (isOffline) Color(0xFFFF1744) else NeonCyan.copy(alpha = 0.4f)
+                    ),
+                    RoundedCornerShape(24.dp)
+                ),
             color = DarkCardBg,
             shape = RoundedCornerShape(24.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-            ) {
-                // Header Image
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(240.dp)
-                        .background(SurfaceDark)
-                ) {
-                    val imageUrl = movie.backdropUrl?.takeIf { it.isNotBlank() } ?: movie.coverUrl
-                    if (imageUrl.isNotBlank()) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(imageUrl)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = movie.title,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val totalHeight = maxHeight
 
-                    // Gradient overlay
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(dialogScrollState)
+                ) {
+                    // Header Image
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Black.copy(alpha = 0.3f),
-                                        Color.Transparent,
-                                        DarkCardBg
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .background(SurfaceDark)
+                    ) {
+                        val imageUrl = movie.backdropUrl?.takeIf { it.isNotBlank() } ?: movie.coverUrl
+                        if (imageUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(imageUrl)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = movie.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        // Gradient overlay
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Black.copy(alpha = 0.3f),
+                                            Color.Transparent,
+                                            DarkCardBg
+                                        )
                                     )
                                 )
-                            )
-                    )
+                        )
 
-                    // Close & Favorite Buttons
-                    Row(
+                    }
+
+                    // Details Content
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .padding(horizontal = 20.dp, vertical = 12.dp)
                     ) {
-                        IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.6f))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Filled.Close, contentDescription = "Fechar", tint = Color.White)
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(NeonCyan)
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Text("FILME", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            if (isOffline) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0xFFFF1744))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Warning,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("FORA DO AR", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                    }
+                                }
+                            }
+
+                            if (movie.year.isNotBlank()) {
+                                Text(
+                                    text = movie.year,
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            if (movie.rating.isNotBlank()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Filled.Star, contentDescription = null, tint = NeonGold, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(movie.rating, color = NeonGold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
 
-                        IconButton(
-                            onClick = onToggleFavorite,
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.6f))
-                        ) {
-                            Icon(
-                                imageVector = if (movie.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                                contentDescription = "Favoritar",
-                                tint = if (movie.isFavorite) NeonPink else Color.White
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = movie.title,
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = movie.category,
+                            color = NeonGreen,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        if (movie.synopsis.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Text(
+                                text = "Sinopse",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = movie.synopsis,
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 13.sp,
+                                lineHeight = 20.sp,
+                                textAlign = TextAlign.Justify
                             )
                         }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        // Play Button
+                        Button(
+                            onClick = onPlay,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = NeonGreen,
+                                contentColor = Color.Black
+                            ),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "ASSISTIR FILME AGORA",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
                     }
                 }
 
-                // Details Content
-                Column(
+                // Always-available Floating Header Buttons (Close & Favorite)
+                Row(
                     modifier = Modifier
+                        .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.75f))
+                            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Fechar",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onToggleFavorite,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.75f))
+                            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = if (movie.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                            contentDescription = "Favoritar",
+                            tint = if (movie.isFavorite) NeonPink else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                // Scrollbar indicator for the entire page/dialog
+                if (dialogScrollState.maxValue > 0) {
+                    val scrollProgress = (dialogScrollState.value.toFloat() / dialogScrollState.maxValue.toFloat()).coerceIn(0f, 1f)
+                    val thumbHeight = (totalHeight * 0.20f).coerceIn(36.dp, 80.dp)
+                    val availableTravel = (totalHeight - thumbHeight - 32.dp).coerceAtLeast(0.dp)
+                    val offsetY = 16.dp + availableTravel * scrollProgress
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 4.dp, top = 16.dp, bottom = 16.dp)
+                            .width(5.dp)
+                            .height(totalHeight - 32.dp)
+                            .clip(RoundedCornerShape(2.5.dp))
+                            .background(Color.White.copy(alpha = 0.12f))
                     ) {
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(NeonCyan)
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Text("FILME", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        if (movie.year.isNotBlank()) {
-                            Text(
-                                text = movie.year,
-                                color = Color.White.copy(alpha = 0.8f),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-
-                        if (movie.rating.isNotBlank()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Star, contentDescription = null, tint = NeonGold, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(2.dp))
-                                Text(movie.rating, color = NeonGold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = movie.title,
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = movie.category,
-                        color = NeonGreen,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    if (movie.synopsis.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "Sinopse",
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = movie.synopsis,
-                            color = Color.White.copy(alpha = 0.75f),
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp
+                                .offset(y = offsetY - 16.dp)
+                                .width(5.dp)
+                                .height(thumbHeight)
+                                .clip(RoundedCornerShape(2.5.dp))
+                                .background(NeonGreen)
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // Play Button
-                    Button(
-                        onClick = onPlay,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = NeonGreen,
-                            contentColor = Color.Black
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "ASSISTIR FILME AGORA",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
         }
@@ -973,11 +1303,13 @@ fun MovieDetailDialog(
 @Composable
 fun SeriesDetailDialog(
     series: MediaItem,
+    initialSeason: SeasonItem? = null,
+    currentlyPlayingEpisode: EpisodeItem? = null,
     onDismiss: () -> Unit,
     onPlayEpisode: (SeasonItem, EpisodeItem) -> Unit,
     onToggleFavorite: () -> Unit
 ) {
-    var selectedSeasonIndex by remember { mutableIntStateOf(0) }
+    val isOffline = !series.isWorking
     val seasons = series.seasons.ifEmpty {
         listOf(
             SeasonItem(
@@ -987,6 +1319,13 @@ fun SeriesDetailDialog(
             )
         )
     }
+
+    val initialIdx = remember(initialSeason, seasons) {
+        if (initialSeason != null) {
+            seasons.indexOfFirst { it.seasonNumber == initialSeason.seasonNumber }.coerceAtLeast(0)
+        } else 0
+    }
+    var selectedSeasonIndex by remember(initialIdx) { mutableIntStateOf(initialIdx) }
 
     val currentSeason = seasons.getOrNull(selectedSeasonIndex) ?: seasons.first()
 
@@ -999,7 +1338,13 @@ fun SeriesDetailDialog(
                 .fillMaxWidth(0.94f)
                 .fillMaxSize(0.92f)
                 .clip(RoundedCornerShape(24.dp))
-                .border(1.dp, NeonPurple.copy(alpha = 0.4f), RoundedCornerShape(24.dp)),
+                .border(
+                    BorderStroke(
+                        if (isOffline) 2.5.dp else 1.dp,
+                        if (isOffline) Color(0xFFFF1744) else NeonPurple.copy(alpha = 0.4f)
+                    ),
+                    RoundedCornerShape(24.dp)
+                ),
             color = DarkCardBg,
             shape = RoundedCornerShape(24.dp)
         ) {
@@ -1085,6 +1430,16 @@ fun SeriesDetailDialog(
                             ) {
                                 Text("SÉRIE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
+                            if (isOffline) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color(0xFFFF1744))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("FORA DO AR", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                }
+                            }
                             if (series.year.isNotBlank()) {
                                 Text(series.year, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                             }
@@ -1101,6 +1456,26 @@ fun SeriesDetailDialog(
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                // Synopsis for series if available
+                if (series.synopsis.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(DarkCardBg)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = series.synopsis,
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                            textAlign = TextAlign.Justify,
+                            maxLines = 4,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -1180,8 +1555,12 @@ fun SeriesDetailDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(episodes, key = { it.id.ifBlank { "${it.episodeNumber}_${it.title}" } }) { ep ->
+                            val isCurrentEp = currentlyPlayingEpisode != null && 
+                                (ep.id == currentlyPlayingEpisode.id || 
+                                (ep.episodeNumber == currentlyPlayingEpisode.episodeNumber && currentSeason.seasonNumber == initialSeason?.seasonNumber))
                             EpisodeCard(
                                 episode = ep,
+                                isCurrentlyPlaying = isCurrentEp,
                                 onPlay = { onPlayEpisode(currentSeason, ep) }
                             )
                         }
@@ -1195,6 +1574,7 @@ fun SeriesDetailDialog(
 @Composable
 fun EpisodeCard(
     episode: EpisodeItem,
+    isCurrentlyPlaying: Boolean = false,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1203,8 +1583,14 @@ fun EpisodeCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .clickable { onPlay() }
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp)),
-        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            .border(
+                if (isCurrentlyPlaying) 2.dp else 1.dp,
+                if (isCurrentlyPlaying) NeonPurple else Color.White.copy(alpha = 0.08f),
+                RoundedCornerShape(14.dp)
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isCurrentlyPlaying) DarkCardBg else SurfaceDark
+        ),
         shape = RoundedCornerShape(14.dp)
     ) {
         Row(
@@ -1218,13 +1604,13 @@ fun EpisodeCard(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(NeonPurple.copy(alpha = 0.2f))
+                    .background(if (isCurrentlyPlaying) NeonPurple else NeonPurple.copy(alpha = 0.2f))
                     .border(1.dp, NeonPurple.copy(alpha = 0.4f), RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = String.format("%02d", episode.episodeNumber),
-                    color = NeonPurple,
+                    color = if (isCurrentlyPlaying) Color.White else NeonPurple,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.ExtraBold
                 )
@@ -1234,14 +1620,33 @@ fun EpisodeCard(
 
             // Episode Info
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = episode.title.ifBlank { "Episódio ${episode.episodeNumber}" },
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = episode.title.ifBlank { "Episódio ${episode.episodeNumber}" },
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (isCurrentlyPlaying) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(NeonPurple)
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "ASSISTINDO",
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                }
 
                 if (!episode.duration.isNullOrBlank() || !episode.synopsis.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
@@ -1267,14 +1672,14 @@ fun EpisodeCard(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(NeonGreen)
+                    .background(if (isCurrentlyPlaying) NeonPurple else NeonGreen)
                     .clickable { onPlay() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
                     contentDescription = "Reproduzir Episódio",
-                    tint = Color.Black,
+                    tint = if (isCurrentlyPlaying) Color.White else Color.Black,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1306,6 +1711,8 @@ fun AddEditMediaDialog(
     // Movie fields
     var movieStreamUrl by remember { mutableStateOf(initialMedia?.movieStreamUrl ?: "") }
     var isMovieWebPlayer by remember { mutableStateOf(initialMedia?.isWebPlayer ?: false) }
+    var isSeriesWebPlayer by remember { mutableStateOf(initialMedia?.isWebPlayer ?: false) }
+    var isWorkingState by remember { mutableStateOf(initialMedia?.isWorking ?: true) }
 
     // Series seasons state
     val seasonsState = remember {
@@ -1672,7 +2079,7 @@ fun AddEditMediaDialog(
                     // =========================================================
                     if (mediaType == MediaContentType.MOVIE) {
                         Text(
-                            text = "Link do Filme (Vídeo / Stream)",
+                            text = "Link do Filme (Vídeo / Stream / Iframe)",
                             color = NeonGreen,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
@@ -1681,14 +2088,26 @@ fun AddEditMediaDialog(
 
                         OutlinedTextField(
                             value = movieStreamUrl,
-                            onValueChange = { movieStreamUrl = it },
-                            label = { Text("Link do Filme (URL do Vídeo / MP4 / M3U8) *") },
-                            placeholder = { Text("https://exemplo.com/filme.mp4 ou .m3u8") },
+                            onValueChange = { text -> 
+                                var processed = text
+                                if (processed.contains("<iframe", ignoreCase = true) && processed.contains("src=\"", ignoreCase = true)) {
+                                    val regex = Regex("src=\"([^\"]+)\"")
+                                    val match = regex.find(processed)
+                                    if (match != null) {
+                                        processed = match.groupValues[1]
+                                        isMovieWebPlayer = true
+                                    }
+                                }
+                                movieStreamUrl = processed
+                            },
+                            label = { Text("Link do Filme (URL ou Código <iframe>) *") },
+                            placeholder = { Text("https://... ou <iframe src=\"...\"></iframe>") },
                             leadingIcon = { Icon(Icons.Filled.Link, contentDescription = null, tint = NeonGreen) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             colors = customTextFieldColors()
                         )
+
 
                         // Web Player Switch
                         Row(
@@ -1736,6 +2155,40 @@ fun AddEditMediaDialog(
                                 .border(1.dp, NeonPurple.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
                                 .padding(14.dp)
                         ) {
+                            // Series Web Player Switch
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(DarkBg)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Reproduzir no Navegador Embutido (Web Player) - Série",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        text = "Padrão para episódios sem Web Player individual",
+                                        color = Color.White.copy(alpha = 0.5f),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                Switch(
+                                    checked = isSeriesWebPlayer,
+                                    onCheckedChange = { isSeriesWebPlayer = it },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.Black,
+                                        checkedTrackColor = NeonPurple
+                                    )
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1953,12 +2406,21 @@ fun AddEditMediaDialog(
                                                 OutlinedTextField(
                                                     value = episode.streamUrl,
                                                     onValueChange = { newUrl ->
+                                                        var processed = newUrl
+                                                        if (processed.contains("<iframe", ignoreCase = true) && processed.contains("src=\"", ignoreCase = true)) {
+                                                            val regex = Regex("src=\"([^\"]+)\"")
+                                                            val match = regex.find(processed)
+                                                            if (match != null) {
+                                                                processed = match.groupValues[1]
+                                                                isSeriesWebPlayer = true
+                                                            }
+                                                        }
                                                         val updatedEps = currentSeason.episodes.toMutableList()
-                                                        updatedEps[epIdx] = episode.copy(streamUrl = newUrl)
+                                                        updatedEps[epIdx] = episode.copy(streamUrl = processed)
                                                         seasonsState[currentSeasonIndex] = currentSeason.copy(episodes = updatedEps)
                                                     },
-                                                    label = { Text("Link do Episódio (URL do Vídeo / Stream) *") },
-                                                    placeholder = { Text("https://exemplo.com/ep1.mp4 ou .m3u8") },
+                                                    label = { Text("Link do Episódio (URL ou Código <iframe>) *") },
+                                                    placeholder = { Text("https://... ou <iframe src=\"...\"></iframe>") },
                                                     leadingIcon = { Icon(Icons.Filled.Link, contentDescription = null, tint = NeonPurple) },
                                                     modifier = Modifier.fillMaxWidth(),
                                                     singleLine = true,
@@ -1970,6 +2432,58 @@ fun AddEditMediaDialog(
                                 }
                             }
                         }
+                    }
+
+                    // Operational Status (Working vs Offline)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isWorkingState) Color(0xFF00E676).copy(alpha = 0.12f) else Color(0xFFFF1744).copy(alpha = 0.15f))
+                            .border(
+                                BorderStroke(1.dp, if (isWorkingState) Color(0xFF00E676).copy(alpha = 0.4f) else Color(0xFFFF1744).copy(alpha = 0.6f)),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable { isWorkingState = !isWorkingState }
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = if (isWorkingState) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (isWorkingState) Color(0xFF00E676) else Color(0xFFFF1744),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = if (isWorkingState) "Status: Funcionando" else "Status: Fora do Ar",
+                                    color = if (isWorkingState) Color(0xFF00E676) else Color(0xFFFF5252),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = if (isWorkingState) "Conteúdo operacional (borda normal)" else "Fora do ar (borda vermelha para o admin)",
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = isWorkingState,
+                            onCheckedChange = { isWorkingState = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.Black,
+                                checkedTrackColor = Color(0xFF00E676),
+                                uncheckedThumbColor = Color.White,
+                                uncheckedTrackColor = Color(0xFFFF1744)
+                            )
+                        )
                     }
 
                     // Error Message Display
@@ -2041,10 +2555,10 @@ fun AddEditMediaDialog(
                                 year = year.trim(),
                                 rating = rating.trim(),
                                 movieStreamUrl = if (mediaType == MediaContentType.MOVIE) movieStreamUrl.trim() else null,
-                                isWebPlayer = if (mediaType == MediaContentType.MOVIE) isMovieWebPlayer else false,
+                                isWebPlayer = if (mediaType == MediaContentType.MOVIE) isMovieWebPlayer else isSeriesWebPlayer,
                                 seasons = if (mediaType == MediaContentType.SERIES) seasonsState.toList() else emptyList(),
                                 isFavorite = initialMedia?.isFavorite ?: false,
-                                isWorking = initialMedia?.isWorking ?: true
+                                isWorking = isWorkingState
                             )
                             onSave(newMedia)
                         },

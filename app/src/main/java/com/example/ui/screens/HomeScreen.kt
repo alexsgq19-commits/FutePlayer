@@ -27,6 +27,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import com.example.util.tvFocusable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -85,6 +86,9 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -165,6 +169,7 @@ fun HomeScreen(
     allUsers: List<User> = emptyList(),
     onAccountClick: () -> Unit = {},
     onOpenUserManagement: () -> Unit = {},
+    onOpenMoviesApi: () -> Unit = {},
     onRefresh: () -> Unit,
     onSearchChange: (String) -> Unit,
     onChampionshipSelect: (String) -> Unit,
@@ -179,6 +184,8 @@ fun HomeScreen(
     onAddOrUpdateMedia: (MediaItem) -> Unit = {},
     onDeleteMedia: (String) -> Unit = {},
     onToggleMediaFavorite: (String) -> Unit = {},
+    onSelectMedia: (MediaItem?) -> Unit = {},
+    onDismissMedia: () -> Unit = {},
     onToggleChannelWorkingStatus: (String) -> Unit = {},
     onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _ -> },
     onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
@@ -199,9 +206,14 @@ fun HomeScreen(
     onPrepareAndPromptInstall: () -> Unit = {},
     onUpdateSupportWhatsapp: (String) -> Unit = {},
     onToggleRegistrationEnabled: (Boolean) -> Unit = {},
+    onPublishCustomNotification: (String, String) -> Unit = { _, _ -> },
     onTestAllChannels: () -> Unit = {},
+    onTestAllMovies: () -> Unit = {},
+    isTestingMovies: Boolean = false,
+    movieTestProgressText: String? = null,
     onTestSingleChannel: (String) -> Unit = {},
     onDismissAdminChannelAlert: () -> Unit = {},
+    onClearCorrectionLogs: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -659,11 +671,20 @@ fun HomeScreen(
                             mediaList = uiState.mediaCatalog,
                             searchQuery = uiState.searchQuery,
                             isAdmin = isAdmin,
+                            selectedMediaItem = uiState.selectedMediaItem,
+                            selectedSeason = uiState.selectedSeason,
+                            selectedEpisode = uiState.selectedEpisode,
+                            onSelectMedia = onSelectMedia,
+                            onDismissMedia = onDismissMedia,
                             onPlayMovie = onPlayMovie,
                             onPlayEpisode = onPlayEpisode,
                             onAddOrUpdateMedia = onAddOrUpdateMedia,
                             onDeleteMedia = onDeleteMedia,
-                            onToggleFavorite = onToggleMediaFavorite
+                            onToggleFavorite = onToggleMediaFavorite,
+                            isTestingMovies = isTestingMovies,
+                            movieTestProgressText = movieTestProgressText,
+                            onTestAllMovies = onTestAllMovies,
+                            onOpenMoviesApi = onOpenMoviesApi
                         )
                     }
 
@@ -682,6 +703,8 @@ fun HomeScreen(
                             onDismissWvcInstallPrompt = onDismissWvcInstallPrompt,
                             onUpdateSupportWhatsapp = onUpdateSupportWhatsapp,
                             onToggleRegistrationEnabled = onToggleRegistrationEnabled,
+                            onPublishCustomNotification = onPublishCustomNotification,
+                            onClearCorrectionLogs = onClearCorrectionLogs,
                             networkStatus = uiState.networkStatus
                         )
                     }
@@ -1473,6 +1496,7 @@ fun ChannelsGridContent(
                     FilterChip(
                         selected = isSelected,
                         onClick = { selectedCategory = category },
+                        modifier = Modifier.tvFocusable(RoundedCornerShape(8.dp)),
                         label = {
                             Text(
                                 text = category,
@@ -1721,8 +1745,10 @@ fun ChannelsGridContent(
             }
 
             Card(
+                onClick = { onPlayChannel(channel.copy(forceWebPlayer = false)) },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .tvFocusable(RoundedCornerShape(18.dp))
                     .clip(RoundedCornerShape(18.dp))
                     .testTag("channel_card_${channel.id}"),
                 colors = CardDefaults.cardColors(
@@ -1737,8 +1763,7 @@ fun ChannelsGridContent(
                     // Header Row with Channel Info
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onPlayChannel(channel.copy(forceWebPlayer = false)) },
+                            .fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -3342,6 +3367,8 @@ fun SupportContent(
     onDismissWvcInstallPrompt: () -> Unit,
     onUpdateSupportWhatsapp: (String) -> Unit = {},
     onToggleRegistrationEnabled: (Boolean) -> Unit = {},
+    onPublishCustomNotification: (String, String) -> Unit = { _, _ -> },
+    onClearCorrectionLogs: () -> Unit = {},
     networkStatus: NetworkStatus
 ) {
     val context = LocalContext.current
@@ -4089,7 +4116,120 @@ fun SupportContent(
             }
         }
 
-        // Ícone Oficial do Aplicativo (Abaixo do Suporte - Visível Apenas para Admin)
+        // Painel do Admin: Notificação Push
+        if (isAdmin) {
+            item {
+                var notificationTitle by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+                var notificationMessage by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                        .testTag("admin_push_notification_card")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = StadiumGreenPrimary.copy(alpha = 0.15f),
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Chat,
+                                        contentDescription = "Notificação Push",
+                                        tint = StadiumGreenPrimary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Enviar Notificação Push",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Envie uma notificação para todos os usuários.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        OutlinedTextField(
+                            value = notificationTitle,
+                            onValueChange = { notificationTitle = it },
+                            label = { Text("Título da Notificação") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = StadiumGreenPrimary,
+                                focusedLabelColor = StadiumGreenPrimary,
+                                cursorColor = StadiumGreenPrimary
+                            )
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = notificationMessage,
+                            onValueChange = { notificationMessage = it },
+                            label = { Text("Mensagem da Notificação") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 3,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = StadiumGreenPrimary,
+                                focusedLabelColor = StadiumGreenPrimary,
+                                cursorColor = StadiumGreenPrimary
+                            )
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Button(
+                            onClick = {
+                                if (notificationTitle.isNotBlank() && notificationMessage.isNotBlank()) {
+                                    onPublishCustomNotification(notificationTitle, notificationMessage)
+                                    Toast.makeText(context, "Notificação enviada com sucesso!", Toast.LENGTH_SHORT).show()
+                                    notificationTitle = ""
+                                    notificationMessage = ""
+                                } else {
+                                    Toast.makeText(context, "Preencha o título e a mensagem.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .tvFocusable(RoundedCornerShape(12.dp)),
+                            colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary)
+                        ) {
+                            Icon(Icons.Default.Publish, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Enviar Notificação", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Relatório de Status & Itens Fora do Ar (Disponível Apenas para Admin)
         if (isAdmin) {
             item {
                 Card(
@@ -4097,10 +4237,10 @@ fun SupportContent(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant
                     ),
-                    border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f)),
+                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.35f)),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("admin_app_icon_card")
+                        .testTag("correction_report_card")
                 ) {
                     Column(
                         modifier = Modifier
@@ -4112,17 +4252,20 @@ fun SupportContent(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 Surface(
                                     shape = CircleShape,
-                                    color = StadiumCyanSecondary.copy(alpha = 0.15f),
-                                    modifier = Modifier.size(40.dp)
+                                    color = StadiumGreenPrimary.copy(alpha = 0.15f),
+                                    modifier = Modifier.size(42.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             imageVector = Icons.Default.AdminPanelSettings,
-                                            contentDescription = "Ícone do Aplicativo",
-                                            tint = StadiumCyanSecondary,
+                                            contentDescription = "Relatório de Status",
+                                            tint = StadiumGreenPrimary,
                                             modifier = Modifier.size(22.dp)
                                         )
                                     }
@@ -4130,13 +4273,13 @@ fun SupportContent(
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column {
                                     Text(
-                                        text = "Logomarca Oficial",
+                                        text = "Relatório de Diagnóstico & Status",
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "Identidade visual do FutePlayer",
+                                        text = "Canais, Filmes & Séries Fora do Ar",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = StadiumCyanSecondary,
                                         fontWeight = FontWeight.SemiBold
@@ -4144,118 +4287,225 @@ fun SupportContent(
                                 }
                             }
 
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = StadiumCyanSecondary.copy(alpha = 0.2f),
-                                border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f)),
-                                modifier = Modifier.padding(start = 8.dp)
-                            ) {
-                                Text(
-                                    text = "ADMIN",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = StadiumCyanSecondary,
-                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
-                                )
+                            if (uiState.autoCorrectionLogs.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                                    modifier = Modifier.padding(start = 8.dp)
+                                ) {
+                                    Text(
+                                        text = "${uiState.autoCorrectionLogs.size} registro(s)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
-                        Column(
+                        Text(
+                            text = "Histórico de testes de streaming executados pelo sistema. Canais, filmes e séries que estiverem fora do ar são identificados aqui e notificados ao Admin para atualização manual de links.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        if (uiState.autoCorrectionLogs.isEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(20.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = StadiumGreenPrimary,
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "Nenhum item fora do ar detectado",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Todos os canais, filmes e séries verificados estão operando normalmente.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        } else {
+                            val dateFormat = remember { java.text.SimpleDateFormat("dd/MM/yyyy • HH:mm", java.util.Locale("pt", "BR")) }
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                uiState.autoCorrectionLogs.take(20).forEach { log ->
+                                    val (badgeColor, typeLabel) = when (log.itemType.uppercase()) {
+                                        "CANAL" -> StadiumCyanSecondary to "CANAL"
+                                        "FILME" -> Color(0xFFAB47BC) to "FILME"
+                                        "SÉRIE" -> Color(0xFFFFA726) to "SÉRIE"
+                                        else -> StadiumGreenPrimary to log.itemType
+                                    }
+                                    val isOffline = log.status.contains("Fora do Ar", ignoreCase = true) || log.status.contains("Atenção", ignoreCase = true) || log.status.contains("Não Encontrado", ignoreCase = true)
+                                    val statusColor = if (isOffline) MaterialTheme.colorScheme.error else StadiumGreenPrimary
+                                    val statusIcon = if (isOffline) Icons.Default.WarningAmber else Icons.Default.CheckCircle
+
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.background.copy(alpha = 0.65f),
+                                        border = BorderStroke(1.dp, if (isOffline) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else badgeColor.copy(alpha = 0.3f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                ) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(6.dp),
+                                                        color = badgeColor.copy(alpha = 0.2f),
+                                                        border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.4f))
+                                                    ) {
+                                                        Text(
+                                                            text = typeLabel,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            color = badgeColor,
+                                                            fontSize = 10.sp,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(
+                                                        text = log.title,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                                Text(
+                                                    text = dateFormat.format(java.util.Date(log.timestamp)),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(6.dp))
+
+                                            Text(
+                                                text = log.description,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 12.sp
+                                            )
+
+                                            Spacer(modifier = Modifier.height(6.dp))
+
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = statusIcon,
+                                                    contentDescription = null,
+                                                    tint = statusColor,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(5.dp))
+                                                Text(
+                                                    text = log.status,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = statusColor,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Botão Limpar Relatório
+                        OutlinedButton(
+                            onClick = {
+                                onClearCorrectionLogs()
+                                Toast.makeText(context, "Histórico de status limpo!", Toast.LENGTH_LONG).show()
+                            },
+                            enabled = uiState.autoCorrectionLogs.isNotEmpty(),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(
-                                    brush = Brush.verticalGradient(
-                                        listOf(
-                                            Color(0xFF0D1B2A),
-                                            Color(0xFF1B263B)
-                                        )
-                                    ),
-                                    shape = RoundedCornerShape(16.dp)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = StadiumGreenPrimary.copy(alpha = 0.35f),
-                                    shape = RoundedCornerShape(16.dp)
-                                )
-                                .padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                                .testTag("btn_clear_correction_report"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (uiState.autoCorrectionLogs.isNotEmpty()) MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                            )
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(180.dp)
-                                    .clip(RoundedCornerShape(28.dp))
-                                    .border(
-                                        width = 2.dp,
-                                        brush = Brush.linearGradient(
-                                            listOf(StadiumGreenPrimary, StadiumCyanSecondary)
-                                        ),
-                                        shape = RoundedCornerShape(28.dp)
-                                    )
-                                    .background(Color.Black),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.futeplayer_app_icon),
-                                    contentDescription = "Ícone Atual do Aplicativo FutePlayer",
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(RoundedCornerShape(28.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            Text(
-                                text = "FutePlayer",
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Black,
-                                color = Color.White
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Limpar Relatório",
+                                modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Ícone oficial em uso no aplicativo para launcher, tela inicial, splash screen e notificações.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White.copy(alpha = 0.8f),
-                                textAlign = TextAlign.Center,
-                                lineHeight = 18.sp
+                                text = "Limpar Relatório de Diagnóstico",
+                                fontWeight = FontWeight.Bold
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = StadiumGreenPrimary.copy(alpha = 0.2f),
-                                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f))
-                                ) {
-                                    Text(
-                                        text = "ÍCONE ATIVO",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = StadiumGreenPrimary,
-                                        fontSize = 11.sp,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                    )
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = StadiumCyanSecondary.copy(alpha = 0.2f),
-                                    border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f))
-                                ) {
-                                    Text(
-                                        text = "ALTA RESOLUÇÃO",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = StadiumCyanSecondary,
-                                        fontSize = 11.sp,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = StadiumCyanSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Aviso: Limpar este relatório apenas apaga o histórico de registros visuais de diagnóstico do Admin.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp
+                            )
                         }
                     }
                 }

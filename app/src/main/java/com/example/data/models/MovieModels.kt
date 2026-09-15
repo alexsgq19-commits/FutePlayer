@@ -34,7 +34,8 @@ data class SeriesEpisode(
     val duration: String = "48min",
     val streamUrl: String,
     val embedUrl: String? = null,
-    val synopsis: String? = null
+    val synopsis: String? = null,
+    val isWebPlayer: Boolean = false
 )
 
 data class SeriesSeason(

@@ -11,12 +11,16 @@ import androidx.lifecycle.viewModelScope
 import com.example.cast.CastManager
 import com.example.cast.CastUiState
 import com.example.data.FutemaisRepository
+import com.example.data.MoviesRepository
+import com.example.data.models.MovieItem
+import com.example.data.models.AutoCorrectionLog
 import com.example.data.models.ChannelOption
 import com.example.data.models.ChannelTestSummary
 import com.example.data.models.EpisodeItem
 import com.example.data.models.MatchItem
 import com.example.data.models.MediaContentType
 import com.example.data.models.MediaItem
+import com.example.data.models.OFFLINE_FALLBACK_URL
 import com.example.data.models.PlayableVideo
 import com.example.data.models.SeasonItem
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +42,7 @@ sealed interface UiScreen {
     data object Home : UiScreen
     data object Player : UiScreen
     data object UserManagement : UiScreen
+    data object MoviesApi : UiScreen
 }
 
 enum class NavigationTab {
@@ -73,7 +78,7 @@ data class HomeUiState(
     val currentTab: NavigationTab = NavigationTab.MATCHES,
     val networkStatus: NetworkStatus = NetworkStatus(),
     val latestApkUrl: String = "",
-    val latestVersionName: String = "1.0.0",
+    val latestVersionName: String = "1.1.0",
     val hasStoredApk: Boolean = false,
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Float = 0f,
@@ -89,7 +94,19 @@ data class HomeUiState(
     val isTestingChannels: Boolean = false,
     val channelTestProgressText: String? = null,
     val lastChannelTestSummary: ChannelTestSummary? = null,
-    val adminChannelAlert: String? = null
+    val adminChannelAlert: String? = null,
+    val isTestingMovies: Boolean = false,
+    val movieTestProgressText: String? = null,
+    val autoCorrectionLogs: List<AutoCorrectionLog> = emptyList(),
+    val selectedMediaItem: MediaItem? = null,
+    val selectedSeason: SeasonItem? = null,
+    val selectedEpisode: EpisodeItem? = null,
+    val hasNextEpisode: Boolean = false,
+    val nextEpisodeTitle: String? = null,
+    val nextSeasonForEpisode: SeasonItem? = null,
+    val nextEpisodeItem: EpisodeItem? = null,
+    val watchProgressMap: Map<String, com.example.data.WatchProgress> = emptyMap(),
+    val initialPlaybackPositionMs: Long = 0L
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -98,6 +115,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val castManager = CastManager.getInstance(application)
     private val userRepository = UserRepository(application)
     private val notificationManager = AppNotificationManager(application)
+    private val watchProgressRepository = com.example.data.WatchProgressRepository(application)
+
+    private val movieApiRepository = com.example.data.MovieApiRepository(application)
+    private val _movieApiSources = MutableStateFlow<List<com.example.data.models.MovieApiSource>>(emptyList())
+    val movieApiSources: StateFlow<List<com.example.data.models.MovieApiSource>> = _movieApiSources.asStateFlow()
+
+    private val _movieApiVideos = MutableStateFlow<List<PlayableVideo>>(emptyList())
+    val movieApiVideos: StateFlow<List<PlayableVideo>> = _movieApiVideos.asStateFlow()
+
+    private val _isSyncingMovieApis = MutableStateFlow(false)
+    val isSyncingMovieApis: StateFlow<Boolean> = _isSyncingMovieApis.asStateFlow()
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -173,7 +201,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val savedUrl = sharedPrefs.getString("latest_apk_url", "") ?: ""
-        val savedVersion = sharedPrefs.getString("latest_version_name", "1.0.0") ?: "1.0.0"
+        val savedVersion = sharedPrefs.getString("latest_version_name", "1.1.0") ?: "1.1.0"
         val savedWvcUrl = sharedPrefs.getString("wvc_apk_url", "") ?: ""
         val defaultWvcUrl = "https://github.com/instantbits/WebVideoCaster/releases/download/v5.7.0/WebVideoCaster-v5.7.0.apk"
         val finalWvcUrl = if (savedWvcUrl.isNotBlank()) savedWvcUrl else defaultWvcUrl
@@ -184,14 +212,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mediaCatalog = repository.getMediaCatalog(),
             latestApkUrl = savedUrl,
             latestVersionName = savedVersion,
-            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.0.0",
+            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.1.0",
             webVideoCasterUrl = finalWvcUrl,
-            supportWhatsappNumber = repository.getSupportWhatsappNumber()
+            supportWhatsappNumber = repository.getSupportWhatsappNumber(),
+            autoCorrectionLogs = repository.getAutoCorrectionLogs(),
+            watchProgressMap = watchProgressRepository.progressFlow.value
         )
+
+        viewModelScope.launch {
+            watchProgressRepository.progressFlow.collect { progressMap ->
+                _uiState.value = _uiState.value.copy(watchProgressMap = progressMap)
+            }
+        }
 
         viewModelScope.launch {
             repository.mediaCatalogFlow.collect { catalog ->
                 _uiState.value = _uiState.value.copy(mediaCatalog = catalog)
+            }
+        }
+
+        viewModelScope.launch {
+            castManager.castUiState.collect { castState ->
+                if (castState.isConnected && castState.currentStreamUrl.isNullOrBlank() && _uiState.value.currentVideo != null) {
+                    castCurrentVideo()
+                }
             }
         }
         
@@ -228,6 +272,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         
         repository.syncWvcUrlFromFirestore { url ->
             _uiState.value = _uiState.value.copy(webVideoCasterUrl = url)
+        }
+
+        viewModelScope.launch {
+            _movieApiSources.value = movieApiRepository.getSources()
+            if (_movieApiSources.value.any { it.isActive && it.apiUrl.isNotBlank() }) {
+                syncMovieApiSources()
+            }
+        }
+
+        // Automatic testing and notification for admin every 12 hours in background
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            while (true) {
+                try {
+                    val lastCheckTime = sharedPrefs.getLong("last_auto_check_time", 0L)
+                    val currentTime = System.currentTimeMillis()
+                    val interval = 12 * 60 * 60 * 1000L // 12 hours
+                    if (currentTime - lastCheckTime > interval) {
+                        // Test channels (testing only, no auto link substitution)
+                        val channelSummary = repository.testAllChannels { _, _, _, _ -> }
+                        
+                        // Test movies and series (testing only, no auto link substitution)
+                        val offlineMediaTitles = mutableListOf<String>()
+                        try {
+                            val catalog = repository.getMediaCatalog()
+                            val moviesRepo = MoviesRepository()
+                            catalog.forEach { item ->
+                                val isSeries = item.type == MediaContentType.SERIES
+                                val currentStreamUrl = if (!isSeries) {
+                                    item.movieStreamUrl.orEmpty()
+                                } else {
+                                    item.seasons.firstOrNull()?.episodes?.firstOrNull()?.streamUrl.orEmpty()
+                                }
+                                val isWorking = if (currentStreamUrl.isNotBlank()) {
+                                    moviesRepo.testMovieServer(currentStreamUrl)
+                                } else {
+                                    false
+                                }
+                                if (isWorking) {
+                                    repository.addOrUpdateMediaItem(item.copy(isWorking = true))
+                                } else {
+                                    offlineMediaTitles.add(item.title)
+                                    val offlineItem = if (!isSeries) {
+                                        item.copy(isWorking = false)
+                                    } else {
+                                        item.copy(isWorking = false)
+                                    }
+                                    repository.addOrUpdateMediaItem(offlineItem)
+                                    repository.addAutoCorrectionLog(
+                                        AutoCorrectionLog(
+                                            itemType = if (isSeries) "SÉRIE" else "FILME",
+                                            title = item.title,
+                                            description = "Título testado e detectado fora do ar. Admin notificado para inclusão de novo link.",
+                                            status = "Fora do Ar (Requer Atenção do Admin)"
+                                        )
+                                    )
+                                }
+                            }
+                        } catch (_: Exception) {}
+
+                        val totalOffline = channelSummary.offlineCount + offlineMediaTitles.size
+                        if (totalOffline > 0) {
+                            notificationManager.showAdminChannelAlertNotification(
+                                title = "⚠️ Itens Fora do Ar Detectados",
+                                message = "$totalOffline item(ns) fora do ar (${channelSummary.offlineCount} canais, ${offlineMediaTitles.size} filmes/séries). Toque para gerenciar.",
+                                offlineCount = totalOffline
+                            )
+                        }
+
+                        sharedPrefs.edit().putLong("last_auto_check_time", currentTime).apply()
+                        _uiState.value = _uiState.value.copy(
+                            autoCorrectionLogs = repository.getAutoCorrectionLogs(),
+                            mediaCatalog = repository.getMediaCatalog(),
+                            quickChannels = repository.getQuickChannels()
+                        )
+                    }
+                } catch (_: Exception) {}
+                kotlinx.coroutines.delay(60 * 60 * 1000L) // Check hourly
+            }
         }
 
         repository.syncRegistrationEnabledFromFirestore { enabled ->
@@ -486,6 +608,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun addMovieApiSource(name: String, url: String, type: String = "JSON / REST") {
+        val newSource = com.example.data.models.MovieApiSource(
+            name = name.ifBlank { "Minha API de Filmes" },
+            apiUrl = url.trim(),
+            apiType = type
+        )
+        _movieApiSources.value = movieApiRepository.addSource(newSource)
+        syncMovieApiSources()
+    }
+
+    fun updateMovieApiSource(source: com.example.data.models.MovieApiSource) {
+        _movieApiSources.value = movieApiRepository.updateSource(source)
+        syncMovieApiSources()
+    }
+
+    fun deleteMovieApiSource(id: String) {
+        _movieApiSources.value = movieApiRepository.deleteSource(id)
+        syncMovieApiSources()
+    }
+
+    fun toggleMovieApiSource(id: String) {
+        _movieApiSources.value = movieApiRepository.toggleSourceActive(id)
+        syncMovieApiSources()
+    }
+
+    fun testMovieApiUrl(url: String, type: String, onResult: (Boolean, String, Int) -> Unit) {
+        viewModelScope.launch {
+            val res = movieApiRepository.testApiUrl(url, type)
+            res.onSuccess { (count, _) ->
+                onResult(true, "Sucesso! $count filmes/séries encontrados na API.", count)
+            }.onFailure { err ->
+                onResult(false, err.message ?: "Erro ao testar API", 0)
+            }
+        }
+    }
+
+    fun syncMovieApiSources() {
+        viewModelScope.launch {
+            _isSyncingMovieApis.value = true
+            val videos = movieApiRepository.fetchAllActiveMovies()
+            _movieApiVideos.value = videos
+            _movieApiSources.value = movieApiRepository.getSources()
+            _isSyncingMovieApis.value = false
+
+            // Asynchronously resolve true titles and posters from IMDb / Cinemeta
+            movieApiRepository.enrichVideosMetadata(videos) { updatedVideos ->
+                _movieApiVideos.value = updatedVideos
+            }
+        }
+    }
+
     fun playDirectVideo(video: PlayableVideo) {
         _uiState.value = _uiState.value.copy(
             currentVideo = video,
@@ -664,12 +837,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val updatedList = repository.getQuickChannels()
-                val alertMsg = if (summary.offlineCount > 0) {
-                    val offlineNames = summary.offlineChannels.take(3).joinToString { it.title }
-                    val extra = if (summary.offlineChannels.size > 3) " e +${summary.offlineChannels.size - 3}" else ""
-                    "⚠️ Atenção Admin: ${summary.offlineCount} canais fora do ar ($offlineNames$extra)"
-                } else {
-                    "✅ Diagnóstico: Todos os ${summary.workingCount} canais estão funcionando normalmente!"
+                val alertMsg = buildString {
+                    if (summary.offlineCount > 0) {
+                        val offlineNames = summary.offlineChannels.take(3).joinToString { it.title }
+                        val extra = if (summary.offlineChannels.size > 3) " e +${summary.offlineChannels.size - 3}" else ""
+                        append("⚠️ Atenção Admin: ${summary.offlineCount} canais fora do ar ($offlineNames$extra). Admin notificado.")
+                    } else {
+                        append("✅ Diagnóstico: Todos os ${summary.workingCount} canais estão funcionando normalmente!")
+                    }
                 }
 
                 _uiState.value = _uiState.value.copy(
@@ -677,7 +852,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     channelTestProgressText = null,
                     quickChannels = updatedList,
                     lastChannelTestSummary = summary,
-                    adminChannelAlert = alertMsg
+                    adminChannelAlert = alertMsg,
+                    autoCorrectionLogs = repository.getAutoCorrectionLogs()
                 )
 
                 if (isAdmin && summary.offlineCount > 0) {
@@ -697,15 +873,141 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun testAllMoviesAndSeries(isAdmin: Boolean = isCurrentUserAdmin()) {
+        if (_uiState.value.isTestingMovies) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isTestingMovies = true,
+                movieTestProgressText = "Iniciando teste de filmes e séries...",
+                adminChannelAlert = null
+            )
+            try {
+                val catalog = repository.getMediaCatalog()
+                val moviesRepo = MoviesRepository()
+                var operationalCount = 0
+                var offlineCount = 0
+                val offlineTitles = mutableListOf<String>()
+
+                catalog.forEachIndexed { index, item ->
+                    _uiState.value = _uiState.value.copy(
+                        movieTestProgressText = "Testando (${index + 1}/${catalog.size}): ${item.title}"
+                    )
+                    try {
+                        val isSeries = item.type == MediaContentType.SERIES
+                        val currentStreamUrl = if (!isSeries) {
+                            item.movieStreamUrl.orEmpty()
+                        } else {
+                            item.seasons.firstOrNull()?.episodes?.firstOrNull()?.streamUrl.orEmpty()
+                        }
+
+                        // Test current stream only (no auto-search or substitution)
+                        val isWorking = if (currentStreamUrl.isNotBlank()) {
+                            moviesRepo.testMovieServer(currentStreamUrl)
+                        } else {
+                            false
+                        }
+
+                        if (isWorking) {
+                            operationalCount++
+                            repository.addOrUpdateMediaItem(item.copy(isWorking = true))
+                        } else {
+                            offlineCount++
+                            offlineTitles.add(item.title)
+                            val offlineItem = if (!isSeries) {
+                                item.copy(isWorking = false)
+                            } else {
+                                item.copy(isWorking = false)
+                            }
+                            repository.addOrUpdateMediaItem(offlineItem)
+                            repository.addAutoCorrectionLog(
+                                AutoCorrectionLog(
+                                    itemType = if (isSeries) "SÉRIE" else "FILME",
+                                    title = item.title,
+                                    description = "Título testado e detectado fora do ar. Admin notificado para inclusão manual de link.",
+                                    status = "Fora do Ar (Requer Atenção do Admin)"
+                                )
+                            )
+                        }
+                    } catch (_: Exception) {
+                        offlineCount++
+                        offlineTitles.add(item.title)
+                        val isItemSeries = item.type == MediaContentType.SERIES
+                        val offlineItem = if (!isItemSeries) {
+                            item.copy(isWorking = false)
+                        } else {
+                            item.copy(isWorking = false)
+                        }
+                        repository.addOrUpdateMediaItem(offlineItem)
+                    }
+                }
+
+                val alertMsg = if (offlineTitles.isNotEmpty()) {
+                    "⚠️ Diagnóstico: $operationalCount operacionais e ${offlineTitles.size} fora do ar (${offlineTitles.take(3).joinToString(", ")}${if (offlineTitles.size > 3) " e mais ${offlineTitles.size - 3}" else ""}). Admin notificado."
+                } else {
+                    "✅ Diagnóstico: Todos os $operationalCount títulos testados estão operacionais!"
+                }
+
+                _uiState.value = _uiState.value.copy(
+                    isTestingMovies = false,
+                    movieTestProgressText = null,
+                    adminChannelAlert = alertMsg,
+                    autoCorrectionLogs = repository.getAutoCorrectionLogs(),
+                    mediaCatalog = repository.getMediaCatalog()
+                )
+
+                if (isAdmin && offlineTitles.isNotEmpty()) {
+                    notificationManager.showAdminChannelAlertNotification(
+                        title = "⚠️ Títulos Fora do Ar Detectados",
+                        message = "${offlineTitles.size} filme(s)/série(s) fora do ar (${offlineTitles.take(2).joinToString(", ")}). Requer adição de link manual.",
+                        offlineCount = offlineCount
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isTestingMovies = false,
+                    movieTestProgressText = null,
+                    adminChannelAlert = "Falha ao testar filmes e séries: ${e.message}"
+                )
+            }
+        }
+    }
+
+    fun clearCorrectionLogs() {
+        repository.clearAutoCorrectionLogs()
+        _uiState.value = _uiState.value.copy(autoCorrectionLogs = emptyList())
+    }
+
     fun testSingleChannel(channelId: String, isAdmin: Boolean = isCurrentUserAdmin()) {
         viewModelScope.launch {
             val channel = _uiState.value.quickChannels.find { it.id == channelId } ?: return@launch
             val isWorking = repository.testSingleChannel(channel)
+
+            if (!isWorking) {
+                val offlineItem = channel.copy(isWorking = false)
+                repository.addCustomChannel(offlineItem)
+                repository.addAutoCorrectionLog(
+                    AutoCorrectionLog(
+                        itemType = "CANAL",
+                        title = channel.title,
+                        description = "Canal testado individualmente e confirmado fora do ar.",
+                        status = "Fora do Ar (Requer Atenção do Admin)"
+                    )
+                )
+            }
+
             val updated = repository.setChannelWorkingStatus(channelId, isWorking)
+            val alertMsg = if (isWorking) {
+                "✅ O canal \"${channel.title}\" está funcionando normalmente!"
+            } else {
+                "⚠️ O canal \"${channel.title}\" foi testado e está FORA DO AR!"
+            }
+
             _uiState.value = _uiState.value.copy(
                 quickChannels = updated,
-                adminChannelAlert = if (!isWorking) "⚠️ O canal \"${channel.title}\" foi testado e está FORA DO AR!" else "✅ O canal \"${channel.title}\" está funcionando normalmente!"
+                adminChannelAlert = alertMsg,
+                autoCorrectionLogs = repository.getAutoCorrectionLogs()
             )
+
             if (isAdmin && !isWorking) {
                 notificationManager.showAdminChannelAlertNotification(
                     title = "⚠️ Canal Fora do Ar",
@@ -785,9 +1087,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(mediaCatalog = updated)
     }
 
+    private fun isDirectMedia(url: String): Boolean {
+        val l = url.lowercase()
+        return (l.contains(".m3u8") || l.contains(".mp4") || l.contains(".ts") || l.contains(".mpd")) &&
+               !l.contains(".php") && !l.contains("cxtv.com.br/tv-ao-vivo") && !l.contains("temporariofutemais")
+    }
+
+    fun selectMediaItem(media: MediaItem?) {
+        _uiState.value = _uiState.value.copy(
+            selectedMediaItem = media,
+            selectedSeason = media?.seasons?.firstOrNull(),
+            selectedEpisode = null,
+            hasNextEpisode = false,
+            nextEpisodeTitle = null,
+            nextSeasonForEpisode = null,
+            nextEpisodeItem = null
+        )
+    }
+
+    fun clearSelectedMedia() {
+        _uiState.value = _uiState.value.copy(
+            selectedMediaItem = null,
+            selectedSeason = null,
+            selectedEpisode = null,
+            hasNextEpisode = false,
+            nextEpisodeTitle = null,
+            nextSeasonForEpisode = null,
+            nextEpisodeItem = null
+        )
+    }
+
+    fun selectSeason(season: SeasonItem) {
+        _uiState.value = _uiState.value.copy(
+            selectedSeason = season
+        )
+    }
+
+    private fun findNextEpisode(series: MediaItem, season: SeasonItem, episode: EpisodeItem): Pair<SeasonItem, EpisodeItem>? {
+        val seasons = series.seasons
+        val currentSeasonIndex = seasons.indexOfFirst { it.seasonNumber == season.seasonNumber }.takeIf { it >= 0 } ?: 0
+        val currentSeasonObj = seasons.getOrNull(currentSeasonIndex) ?: season
+        val epIndex = currentSeasonObj.episodes.indexOfFirst { it.id == episode.id || it.episodeNumber == episode.episodeNumber }
+
+        if (epIndex >= 0 && epIndex + 1 < currentSeasonObj.episodes.size) {
+            return Pair(currentSeasonObj, currentSeasonObj.episodes[epIndex + 1])
+        }
+
+        // Check next season
+        if (currentSeasonIndex + 1 < seasons.size) {
+            val nextSeason = seasons[currentSeasonIndex + 1]
+            val firstEp = nextSeason.episodes.firstOrNull()
+            if (firstEp != null) {
+                return Pair(nextSeason, firstEp)
+            }
+        }
+        return null
+    }
+
     fun playMovie(movie: MediaItem) {
         val streamUrl = movie.movieStreamUrl.orEmpty()
         if (streamUrl.isBlank()) return
+        val isWeb = movie.isWebPlayer || !isDirectMedia(streamUrl)
         val video = PlayableVideo(
             id = movie.id,
             title = movie.title,
@@ -795,11 +1155,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             streamUrl = streamUrl,
             posterUrl = movie.backdropUrl ?: movie.coverUrl,
             isLive = false,
-            embedUrl = if (movie.isWebPlayer) streamUrl else null,
-            forceWebPlayer = movie.isWebPlayer,
+            embedUrl = if (isWeb) streamUrl else null,
+            forceWebPlayer = isWeb,
             category = movie.category,
             isFavorite = movie.isFavorite,
             isWorking = movie.isWorking
+        )
+        _uiState.value = _uiState.value.copy(
+            currentTab = NavigationTab.MOVIES_SERIES,
+            selectedMediaItem = movie,
+            selectedSeason = null,
+            selectedEpisode = null,
+            hasNextEpisode = false,
+            nextEpisodeTitle = null,
+            nextSeasonForEpisode = null,
+            nextEpisodeItem = null
         )
         playDirectVideo(video)
     }
@@ -807,7 +1177,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun playEpisode(series: MediaItem, season: SeasonItem, episode: EpisodeItem) {
         val streamUrl = episode.streamUrl
         if (streamUrl.isBlank()) return
-        val isWeb = episode.isWebPlayer || series.isWebPlayer
+        val isWeb = episode.isWebPlayer || series.isWebPlayer || !isDirectMedia(streamUrl)
         val video = PlayableVideo(
             id = episode.id,
             title = "${series.title} - T${season.seasonNumber}:E${episode.episodeNumber}",
@@ -821,22 +1191,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isFavorite = series.isFavorite,
             isWorking = series.isWorking
         )
+
+        val nextPair = findNextEpisode(series, season, episode)
+        val nextEpTitle = nextPair?.let { (nextS, nextE) ->
+            "T${nextS.seasonNumber}:E${nextE.episodeNumber} - ${nextE.title.ifBlank { "Episódio ${nextE.episodeNumber}" }}"
+        }
+
+        _uiState.value = _uiState.value.copy(
+            currentTab = NavigationTab.MOVIES_SERIES,
+            selectedMediaItem = series,
+            selectedSeason = season,
+            selectedEpisode = episode,
+            hasNextEpisode = nextPair != null,
+            nextEpisodeTitle = nextEpTitle,
+            nextSeasonForEpisode = nextPair?.first,
+            nextEpisodeItem = nextPair?.second
+        )
         playDirectVideo(video)
     }
 
-    fun castCurrentVideo() {
+    fun playNextEpisode() {
+        val series = _uiState.value.selectedMediaItem ?: return
+        val nextSeason = _uiState.value.nextSeasonForEpisode ?: return
+        val nextEpisode = _uiState.value.nextEpisodeItem ?: return
+
+        playEpisode(series, nextSeason, nextEpisode)
+    }
+
+    fun onPlayerBack() {
+        _uiState.value = _uiState.value.copy(
+            currentVideo = null
+        )
+        _currentScreen.value = UiScreen.Home
+    }
+
+    fun castCurrentVideo(streamUrlOverride: String? = null) {
         val video = _uiState.value.currentVideo ?: return
+        val effectiveUrl = streamUrlOverride?.takeIf { it.isNotBlank() }
+            ?: video.streamUrl.ifBlank { video.embedUrl ?: "" }
+        if (effectiveUrl.isBlank()) return
         castManager.castMedia(
             title = video.title,
             subtitle = video.subtitle,
-            streamUrl = video.streamUrl,
+            streamUrl = effectiveUrl,
             posterUrl = video.posterUrl,
-            isLive = video.isLive
+            isLive = video.isLive,
+            headers = video.headers
         )
     }
 
     fun toggleCastPlayPause() {
         castManager.togglePlayPause()
+    }
+
+    fun seekCast(positionMs: Long) {
+        castManager.seekTo(positionMs)
+    }
+
+    fun seekCastForward() {
+        castManager.seekForward()
+    }
+
+    fun seekCastBackward() {
+        castManager.seekBackward()
     }
 
     fun disconnectCast() {
@@ -1272,6 +1689,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (trimmed.isNotBlank()) {
             repository.saveSupportWhatsappNumber(trimmed)
             _uiState.value = _uiState.value.copy(supportWhatsappNumber = trimmed)
+        }
+    }
+
+    fun publishCustomNotification(title: String, message: String) {
+        viewModelScope.launch {
+            repository.publishCustomNotificationToFirestore(title, message)
         }
     }
 

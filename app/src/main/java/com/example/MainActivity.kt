@@ -28,6 +28,7 @@ import com.example.ui.MainViewModel
 import com.example.ui.UiScreen
 import com.example.ui.screens.AccountDialog
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.MoviesApiScreen
 import com.example.ui.screens.PlayerScreen
 import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.UserManagementScreen
@@ -48,12 +49,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        try {
-            android.system.Os.setenv("LIBGL_ALWAYS_SOFTWARE", "1", true)
-            android.system.Os.setenv("MESA_LOADER_DRIVER_OVERRIDE", "swrast", true)
-            android.system.Os.setenv("MESA_LOG_LEVEL", "none", true)
-            android.system.Os.setenv("MESA_DEBUG", "0", true)
-        } catch (_: Exception) {}
         enableEdgeToEdge()
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -122,6 +117,9 @@ class MainActivity : AppCompatActivity() {
                                     onOpenUserManagement = {
                                         viewModel.navigateTo(UiScreen.UserManagement)
                                     },
+                                    onOpenMoviesApi = {
+                                        viewModel.navigateTo(UiScreen.MoviesApi)
+                                    },
                                     onRefresh = { viewModel.loadMatches(isRefresh = true) },
                                     onSearchChange = { viewModel.onSearchQueryChanged(it) },
                                     onChampionshipSelect = { viewModel.onChampionshipSelected(it) },
@@ -147,6 +145,12 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onToggleMediaFavorite = { id ->
                                         viewModel.toggleMediaFavorite(id)
+                                    },
+                                    onSelectMedia = { media ->
+                                        viewModel.selectMediaItem(media)
+                                    },
+                                    onDismissMedia = {
+                                        viewModel.clearSelectedMedia()
                                     },
                                     onToggleChannelWorkingStatus = { viewModel.toggleChannelWorkingStatus(it) },
                                     onAddQuickChannel = { title, subtitle, url, isWebPlayer, category, isWorking ->
@@ -201,36 +205,52 @@ class MainActivity : AppCompatActivity() {
                                         viewModel.updateSupportWhatsappNumber(newNumber)
                                     },
                                     onToggleRegistrationEnabled = { enabled -> viewModel.setRegistrationEnabled(enabled) },
-                                     onTestAllChannels = {
+                                    onPublishCustomNotification = { title, message -> viewModel.publishCustomNotification(title, message) },
+                                    onTestAllChannels = {
                                         viewModel.testAllChannels()
                                     },
+                                    onTestAllMovies = {
+                                        viewModel.testAllMoviesAndSeries()
+                                    },
+                                    isTestingMovies = uiState.isTestingMovies,
+                                    movieTestProgressText = uiState.movieTestProgressText,
                                     onTestSingleChannel = { channelId ->
                                         viewModel.testSingleChannel(channelId)
                                     },
                                     onDismissAdminChannelAlert = {
                                         viewModel.dismissAdminChannelAlert()
+                                    },
+                                    onClearCorrectionLogs = {
+                                        viewModel.clearCorrectionLogs()
                                     }
                                 )
                             }
 
                             is UiScreen.Player -> {
                                 BackHandler {
-                                    viewModel.navigateTo(UiScreen.Home)
+                                    viewModel.onPlayerBack()
                                 }
 
                                 uiState.currentVideo?.let { video ->
                                     PlayerScreen(
                                         video = video,
                                         castUiState = castUiState,
-                                        onBack = { viewModel.navigateTo(UiScreen.Home) },
+                                        hasNextEpisode = uiState.hasNextEpisode,
+                                        nextEpisodeTitle = uiState.nextEpisodeTitle,
+                                        onPlayNextEpisode = { viewModel.playNextEpisode() },
+                                        onBack = { viewModel.onPlayerBack() },
                                         onCastToggle = { viewModel.toggleCastPlayPause() },
+                                        onSeekCast = { pos -> viewModel.seekCast(pos) },
+                                        onSeekCastForward = { viewModel.seekCastForward() },
+                                        onSeekCastBackward = { viewModel.seekCastBackward() },
                                         onDisconnectCast = { viewModel.disconnectCast() },
+                                        onCastVideo = { url -> viewModel.castCurrentVideo(url) },
                                         onPlaybackError = { channelId ->
                                             viewModel.reportChannelPlaybackError(channelId)
                                         }
                                     )
                                 } ?: run {
-                                    viewModel.navigateTo(UiScreen.Home)
+                                    viewModel.onPlayerBack()
                                 }
                             }
 
@@ -246,6 +266,44 @@ class MainActivity : AppCompatActivity() {
                                     onRefresh = { viewModel.refreshUserPresence() },
                                     onSaveUser = { user, cb -> viewModel.saveUser(user, cb) },
                                     onDeleteUser = { uid, cb -> viewModel.deleteUser(uid, cb) }
+                                )
+                            }
+
+                            is UiScreen.MoviesApi -> {
+                                BackHandler {
+                                    viewModel.navigateTo(UiScreen.Home)
+                                }
+
+                                val apiSources by viewModel.movieApiSources.collectAsState()
+                                val apiVideos by viewModel.movieApiVideos.collectAsState()
+                                val isSyncingApis by viewModel.isSyncingMovieApis.collectAsState()
+
+                                MoviesApiScreen(
+                                    apiSources = apiSources,
+                                    apiVideos = apiVideos,
+                                    isSyncing = isSyncingApis,
+                                    onBack = { viewModel.navigateTo(UiScreen.Home) },
+                                    onAddApiSource = { name, url, type ->
+                                        viewModel.addMovieApiSource(name, url, type)
+                                    },
+                                    onUpdateApiSource = { source ->
+                                        viewModel.updateMovieApiSource(source)
+                                    },
+                                    onDeleteApiSource = { id ->
+                                        viewModel.deleteMovieApiSource(id)
+                                    },
+                                    onToggleApiSource = { id ->
+                                        viewModel.toggleMovieApiSource(id)
+                                    },
+                                    onTestApiUrl = { url, type, cb ->
+                                        viewModel.testMovieApiUrl(url, type, cb)
+                                    },
+                                    onSyncAllApis = {
+                                        viewModel.syncMovieApiSources()
+                                    },
+                                    onPlayVideo = { video ->
+                                        viewModel.playDirectVideo(video)
+                                    }
                                 )
                             }
 

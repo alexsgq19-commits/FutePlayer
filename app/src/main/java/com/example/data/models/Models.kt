@@ -1,5 +1,15 @@
 package com.example.data.models
 
+const val OFFLINE_FALLBACK_URL = "https://www.revistacircuito.com/wp-content/uploads/2022/06/19083931_140186_GDO.jpg"
+
+fun isOfflineFallbackUrl(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val trimmed = url.trim()
+    return trimmed.equals(OFFLINE_FALLBACK_URL, ignoreCase = true) ||
+           trimmed.contains("19083931_140186_GDO.jpg", ignoreCase = true) ||
+           trimmed.contains("revistacircuito.com", ignoreCase = true)
+}
+
 data class MatchItem(
     val id: String,
     val homeTeam: String,
@@ -102,3 +112,12 @@ data class MediaItem(
     val totalSeasons: Int
         get() = if (type == MediaContentType.SERIES) seasons.size else 0
 }
+
+data class AutoCorrectionLog(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val timestamp: Long = System.currentTimeMillis(),
+    val itemType: String, // "CANAL", "FILME", "SÉRIE"
+    val title: String,
+    val description: String,
+    val status: String = "Corrigido e Operacional"
+)
