@@ -1,0 +1,16 @@
+{
+  "name": "futeplayer-payment-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker para integração de pagamentos e webhook da InfinitePay com Firebase Firestore para FutePlayer",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "itty-router": "^5.0.18"
+  },
+  "devDependencies": {
+    "wrangler": "^3.114.0"
+  }
+}

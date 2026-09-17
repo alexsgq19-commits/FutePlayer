@@ -1,0 +1,14 @@
+name = "futeplayer-payment-worker"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+compatibility_flags = [ "nodejs_compat" ]
+
+[vars]
+FIREBASE_PROJECT_ID = "futeplayer-2b630"
+INFINITEPAY_HANDLE = "alexsandroguerraqueiroz"
+PUBLIC_WORKER_URL = "https://futeplayer-payment-worker.SEU_SUBDOMINIO.workers.dev"
+
+# Secrets recomendados para serem configurados via 'wrangler secret put':
+# - FIREBASE_CLIENT_EMAIL
+# - FIREBASE_PRIVATE_KEY
+# - (Opcional) FIREBASE_SERVICE_ACCOUNT_JSON

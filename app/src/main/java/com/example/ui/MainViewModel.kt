@@ -317,6 +317,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (!updatedUser.canAccessPremiumContent() && _currentScreen.value is UiScreen.Player) {
                     onPlayerBack()
                     openSubscriptionDialog()
+                } else if (!updatedUser.canAccessPremiumContent() && _subscriptionFlowState.value is SubscriptionFlowState.Idle && !_showSubscriptionDialog.value) {
+                    // Inicia automaticamente o fluxo de renovação ao detectar vencimento fora do player
+                    openSubscriptionDialog()
                 }
 
                 // Se estava aguardando pagamento e a assinatura foi confirmada como ativa:

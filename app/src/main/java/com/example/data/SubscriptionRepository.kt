@@ -31,9 +31,32 @@ class SubscriptionRepository(private val context: Context) {
 
         // InfiniteTag padrão do lojista (sem $)
         private const val DEFAULT_HANDLE = "alexsandroguerraqueiroz"
-        // Endpoint configurável da Cloud Function do backend
-        // Substitua pelo domínio da sua Cloud Function quando implantada no Firebase
-        private const val DEFAULT_BACKEND_BASE_URL = "https://us-central1-futeplayer-2b630.cloudfunctions.net"
+
+        // Endpoint configurável do Cloudflare Worker de Pagamentos
+        // O app pode ler de 'app_config/settings.paymentServerUrl' ou usar o valor padrão abaixo.
+        // Substitua pelo subdomínio do seu Cloudflare Worker (ex: https://futeplayer-payment-worker.SEU_SUBDOMINIO.workers.dev)
+        private const val DEFAULT_BACKEND_BASE_URL = "https://futeplayer-payment-worker.workers.dev"
+        private const val PREFS_KEY_BACKEND_URL = "custom_payment_server_url"
+    }
+
+    /**
+     * Retorna a URL base do backend de pagamento configurada no app ou no Firestore.
+     */
+    fun getBackendBaseUrl(): String {
+        val prefs = context.getSharedPreferences("futemais_prefs", Context.MODE_PRIVATE)
+        return prefs.getString(PREFS_KEY_BACKEND_URL, DEFAULT_BACKEND_BASE_URL)
+            ?.trim()
+            ?.removeSuffix("/")
+            ?: DEFAULT_BACKEND_BASE_URL
+    }
+
+    /**
+     * Permite atualizar a URL do backend de pagamento em tempo de execução via configuração remota ou admin.
+     */
+    fun setBackendBaseUrl(url: String) {
+        val clean = url.trim().removeSuffix("/")
+        val prefs = context.getSharedPreferences("futemais_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString(PREFS_KEY_BACKEND_URL, clean).apply()
     }
 
     private val httpClient by lazy {
@@ -112,7 +135,7 @@ class SubscriptionRepository(private val context: Context) {
             }
         }
 
-        // 2. Chama a Cloud Function createInfinitePayCheckout no backend
+        // 2. Chama o Servidor / Cloudflare Worker POST /createInfinitePayCheckout
         try {
             val jsonBody = JSONObject().apply {
                 put("uid", uid)
@@ -120,10 +143,17 @@ class SubscriptionRepository(private val context: Context) {
                 put("amount", RENEWAL_AMOUNT_CENTS)
                 put("userName", user.name)
                 put("userPhone", user.phone)
+                if (user.sessionToken.isNotBlank()) {
+                    put("sessionToken", user.sessionToken)
+                }
+                if (user.deviceId.isNotBlank()) {
+                    put("deviceId", user.deviceId)
+                }
             }
 
+            val backendUrl = getBackendBaseUrl()
             val request = Request.Builder()
-                .url("$DEFAULT_BACKEND_BASE_URL/createInfinitePayCheckout")
+                .url("$backendUrl/createInfinitePayCheckout")
                 .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
                 .build()
 
@@ -145,16 +175,15 @@ class SubscriptionRepository(private val context: Context) {
                     Result.success(newOrder)
                 }
             } else {
-                // Se a Cloud Function ainda não estiver publicada em produção ou offline,
-                // constrói link para direcionar à interface de pagamento associando o handle e orderNsu
+                // Se o servidor externo estiver offline ou retornando erro, usa link direto com handle e orderNsu
                 val fallbackUrl = "https://checkout.infinitepay.io/pay/$DEFAULT_HANDLE?order_nsu=$orderNsu&amount=$RENEWAL_AMOUNT_CENTS"
                 newOrder.checkoutUrl = fallbackUrl
                 db?.collection("payment_orders")?.document(orderNsu)?.update("checkoutUrl", fallbackUrl)?.await()
                 Result.success(newOrder)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao chamar Cloud Function de checkout: ${e.message}", e)
-            // Em caso de falha de conexão com a Cloud Function, provê link seguro para prosseguir
+            Log.e(TAG, "Erro ao chamar backend externo de checkout: ${e.message}", e)
+            // Em caso de indisponibilidade temporária de rede com o backend, provê link de checkout seguro
             val fallbackUrl = "https://checkout.infinitepay.io/pay/$DEFAULT_HANDLE?order_nsu=$orderNsu&amount=$RENEWAL_AMOUNT_CENTS"
             newOrder.checkoutUrl = fallbackUrl
             db?.collection("payment_orders")?.document(orderNsu)?.update("checkoutUrl", fallbackUrl)?.await()
