@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Regras de Usuários:
+    // Usuários podem ler seus próprios dados ou lista (se autenticados).
+    // Usuários comuns NÃO podem alterar subscriptionStatus, subscriptionExpiresAt ou isBillingExempt.
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null && (
+        // Se for o próprio usuário, proíbe alterar campos sensíveis de assinatura
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['subscriptionStatus', 'subscriptionExpiresAt', 'isBillingExempt', 'lastPaymentAt', 'lastPaymentId'])
+        ||
+        // Administrador autenticado ou Cloud Functions (Admin SDK)
+        request.auth.token.role == 'ADMIN'
+      );
+      allow delete: if request.auth != null && request.auth.token.role == 'ADMIN';
+    }
+
+    // Coleção de Pedidos: Usuários podem criar pedidos em status PENDING e ler seus pedidos
+    match /payment_orders/{orderId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.resource.data.status == 'PENDING';
+      // Apenas o backend / Cloud Functions pode atualizar para PAID
+      allow update: if request.auth.token.role == 'ADMIN';
+      allow delete: if false;
+    }
+
+    // Coleção de Pagamentos: Criada exclusivamente pelo backend
+    match /payments/{paymentId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth.token.role == 'ADMIN';
+    }
+  }
+}

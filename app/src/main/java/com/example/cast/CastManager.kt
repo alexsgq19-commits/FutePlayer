@@ -184,16 +184,13 @@ class CastManager private constructor(context: Context) {
 
             val streamType = if (isLive) MediaInfo.STREAM_TYPE_LIVE else MediaInfo.STREAM_TYPE_BUFFERED
 
+            // Build complete WVC headers (User-Agent, Referer, Origin, Cookie, Accept, Sec-Fetch, etc.)
+            val wvcHeaders = com.example.util.VideoLinkCompatibility.buildWvcHeaders(streamUrl, null, headers)
+
             val customDataJson = org.json.JSONObject().apply {
                 val headersObj = org.json.JSONObject()
-                headers?.forEach { (k, v) ->
+                wvcHeaders.forEach { (k, v) ->
                     headersObj.put(k, v)
-                }
-                if (!headersObj.has("Referer")) {
-                    headersObj.put("Referer", "https://futemais.link/")
-                }
-                if (!headersObj.has("User-Agent")) {
-                    headersObj.put("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
                 }
                 put("com.google.android.gms.cast.metadata.HTTP_HEADERS", headersObj)
                 put("httpHeaders", headersObj)

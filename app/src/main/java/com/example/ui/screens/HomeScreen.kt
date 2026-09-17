@@ -35,11 +35,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -168,6 +171,7 @@ fun HomeScreen(
     currentUser: User? = null,
     allUsers: List<User> = emptyList(),
     onAccountClick: () -> Unit = {},
+    onOpenRenewSubscription: () -> Unit = {},
     onOpenUserManagement: () -> Unit = {},
     onOpenMoviesApi: () -> Unit = {},
     onRefresh: () -> Unit,
@@ -231,6 +235,7 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .statusBarsPadding()
+                .imePadding()
         ) {
             // ==========================================
             // TOP HEADER
@@ -619,6 +624,59 @@ fun HomeScreen(
                                 borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                             )
                         )
+                    }
+                }
+            }
+
+            // Expiration notice banner if user has expired subscription
+            if (currentUser != null && !currentUser.canAccessPremiumContent()) {
+                Surface(
+                    color = StadiumAccentRed.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, StadiumAccentRed.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clickable { onOpenRenewSubscription() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Block,
+                            contentDescription = "Assinatura Expirada",
+                            tint = StadiumAccentRed,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Assinatura Vencida • Acesso Bloqueado",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = StadiumAccentRed
+                            )
+                            Text(
+                                text = "Toque aqui para renovar por R$ 10,00 via InfinitePay (liberação via webhook).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = StadiumGreenPrimary
+                        ) {
+                            Text(
+                                text = "RENOVAR",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 11.sp,
+                                color = Color.Black,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -2071,21 +2129,30 @@ fun ChannelsGridContent(
 
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { showAddDialog = false },
-            properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = true)
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
-            Surface(
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .testTag("dialog_add_channel"),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
+                    .fillMaxSize()
+                    .imePadding()
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column(
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(24.dp)
+                        .wrapContentHeight()
+                        .clip(RoundedCornerShape(24.dp))
+                        .testTag("dialog_add_channel"),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(24.dp)
+                    ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
@@ -2471,6 +2538,7 @@ fun ChannelsGridContent(
             }
         }
     }
+}
 
     // Dialog: Editar Canal Rápido
     if (showEditDialog && editingChannel != null) {
@@ -2480,21 +2548,30 @@ fun ChannelsGridContent(
 
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { showEditDialog = false },
-            properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = true)
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
-            Surface(
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .testTag("dialog_edit_channel"),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
+                    .fillMaxSize()
+                    .imePadding()
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column(
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(24.dp)
+                        .wrapContentHeight()
+                        .clip(RoundedCornerShape(24.dp))
+                        .testTag("dialog_edit_channel"),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(24.dp)
+                    ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
@@ -2911,6 +2988,7 @@ fun ChannelsGridContent(
             }
         }
     }
+}
 
     // Dialog: Confirmação de Exclusão de Canal
     if (showDeleteConfirmDialog && channelToDelete != null) {
@@ -2945,21 +3023,30 @@ fun ChannelsGridContent(
     if (showCreateCategoryDialog) {
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { showCreateCategoryDialog = false },
-            properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = true)
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
-            Surface(
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .testTag("dialog_manage_categories"),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
+                    .fillMaxSize()
+                    .imePadding()
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column(
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(22.dp)
+                        .wrapContentHeight()
+                        .clip(RoundedCornerShape(24.dp))
+                        .testTag("dialog_manage_categories"),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(22.dp)
+                    ) {
                     // Header
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -3286,12 +3373,17 @@ fun ChannelsGridContent(
             }
         }
     }
+}
 
     // Dialog: Editar Categoria (Admin Only)
     if (editingCategory != null) {
         val catToEdit = editingCategory!!
         AlertDialog(
             onDismissRequest = { editingCategory = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .imePadding(),
             title = { Text("Editar Categoria") },
             text = {
                 Column {
@@ -4516,6 +4608,10 @@ fun SupportContent(
     if (showEditWhatsappDialog) {
         AlertDialog(
             onDismissRequest = { showEditWhatsappDialog = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .imePadding(),
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(

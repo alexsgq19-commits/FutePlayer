@@ -60,7 +60,18 @@ class UserRepository(private val context: Context) {
                         isOnline = obj.optBoolean("isOnline", false),
                         lastSeen = obj.optLong("lastSeen", 0L),
                         deviceId = obj.optString("deviceId", ""),
-                        sessionToken = obj.optString("sessionToken", "")
+                        sessionToken = obj.optString("sessionToken", ""),
+                        isBillingEnabled = obj.optBoolean("isBillingEnabled", true),
+                        expirationDate = obj.optLong("expirationDate", 0L),
+                        monthlyFee = obj.optDouble("monthlyFee", 10.0),
+                        lastPaymentDate = obj.optLong("lastPaymentDate", 0L),
+                        paymentStatus = obj.optString("paymentStatus", "ACTIVE"),
+                        infinitePayTransactionId = obj.optString("infinitePayTransactionId", ""),
+                        isBillingExempt = obj.optBoolean("isBillingExempt", false),
+                        subscriptionStatus = obj.optString("subscriptionStatus", "NONE"),
+                        subscriptionExpiresAt = obj.optLong("subscriptionExpiresAt", 0L),
+                        lastPaymentAt = obj.optLong("lastPaymentAt", 0L),
+                        lastPaymentId = obj.optString("lastPaymentId", "")
                     )
                 )
             }
@@ -87,6 +98,17 @@ class UserRepository(private val context: Context) {
                     put("lastSeen", user.lastSeen)
                     put("deviceId", user.deviceId)
                     put("sessionToken", user.sessionToken)
+                    put("isBillingEnabled", user.isBillingEnabled)
+                    put("expirationDate", user.expirationDate)
+                    put("monthlyFee", user.monthlyFee)
+                    put("lastPaymentDate", user.lastPaymentDate)
+                    put("paymentStatus", user.paymentStatus)
+                    put("infinitePayTransactionId", user.infinitePayTransactionId)
+                    put("isBillingExempt", user.isBillingExempt)
+                    put("subscriptionStatus", user.subscriptionStatus)
+                    put("subscriptionExpiresAt", user.subscriptionExpiresAt)
+                    put("lastPaymentAt", user.lastPaymentAt)
+                    put("lastPaymentId", user.lastPaymentId)
                 }
                 arr.put(obj)
             }
@@ -104,6 +126,26 @@ class UserRepository(private val context: Context) {
         val finalUid = if (!storedUid.isNullOrBlank()) storedUid else docId
         val devId = doc.getString("deviceId") ?: doc.getString("currentDeviceId") ?: ""
         val sToken = doc.getString("sessionToken") ?: ""
+        val billingEnabled = doc.getBoolean("isBillingEnabled") ?: doc.getBoolean("billingEnabled") ?: true
+        val expDate = doc.getLong("expirationDate") ?: 0L
+        val fee = doc.getDouble("monthlyFee") ?: 10.0
+        val lastPay = doc.getLong("lastPaymentDate") ?: 0L
+        val payStatus = doc.getString("paymentStatus") ?: "ACTIVE"
+        val ipayTx = doc.getString("infinitePayTransactionId") ?: ""
+
+        val isExempt = doc.getBoolean("isBillingExempt") ?: false
+        val subExpiresAt = doc.getLong("subscriptionExpiresAt") ?: expDate
+        val rawSubStatus = doc.getString("subscriptionStatus")
+        val subStatus = if (!rawSubStatus.isNullOrBlank()) {
+            rawSubStatus
+        } else {
+            // Compatibilidade com docs antigos
+            val effectiveExp = if (subExpiresAt > 0L) subExpiresAt else ((doc.getLong("createdAt") ?: 0L) + 30L * 24 * 3600 * 1000L)
+            if (effectiveExp > System.currentTimeMillis()) "ACTIVE" else "NONE"
+        }
+        val subLastPayAt = doc.getLong("lastPaymentAt") ?: lastPay
+        val subLastPayId = doc.getString("lastPaymentId") ?: ipayTx
+
         return User(
             uid = finalUid,
             name = doc.getString("name") ?: "",
@@ -116,7 +158,18 @@ class UserRepository(private val context: Context) {
             isOnline = rawOnline,
             lastSeen = rawLastSeen,
             deviceId = devId,
-            sessionToken = sToken
+            sessionToken = sToken,
+            isBillingEnabled = billingEnabled,
+            expirationDate = expDate,
+            monthlyFee = fee,
+            lastPaymentDate = lastPay,
+            paymentStatus = payStatus,
+            infinitePayTransactionId = ipayTx,
+            isBillingExempt = isExempt,
+            subscriptionStatus = subStatus,
+            subscriptionExpiresAt = subExpiresAt,
+            lastPaymentAt = subLastPayAt,
+            lastPaymentId = subLastPayId
         )
     }
 
@@ -475,7 +528,18 @@ class UserRepository(private val context: Context) {
                     "lastSeen" to finalUser.lastSeen,
                     "deviceId" to finalUser.deviceId,
                     "currentDeviceId" to finalUser.deviceId,
-                    "sessionToken" to finalUser.sessionToken
+                    "sessionToken" to finalUser.sessionToken,
+                    "isBillingEnabled" to finalUser.isBillingEnabled,
+                    "expirationDate" to finalUser.expirationDate,
+                    "monthlyFee" to finalUser.monthlyFee,
+                    "lastPaymentDate" to finalUser.lastPaymentDate,
+                    "paymentStatus" to finalUser.paymentStatus,
+                    "infinitePayTransactionId" to finalUser.infinitePayTransactionId,
+                    "isBillingExempt" to finalUser.isBillingExempt,
+                    "subscriptionStatus" to finalUser.subscriptionStatus,
+                    "subscriptionExpiresAt" to finalUser.subscriptionExpiresAt,
+                    "lastPaymentAt" to finalUser.lastPaymentAt,
+                    "lastPaymentId" to finalUser.lastPaymentId
                 )
                 db.collection("users").document(finalUser.uid).set(data, SetOptions.merge()).await()
             }
@@ -483,6 +547,31 @@ class UserRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error saving user: ${e.message}", e)
             Result.success(Unit)
+        }
+    }
+
+    suspend fun setUserBillingExempt(uid: String, isExempt: Boolean): Result<Unit> {
+        if (uid.isBlank()) return Result.failure(IllegalArgumentException("UID inválido"))
+
+        // Update local cache
+        val current = getLocalUsers().toMutableList()
+        val idx = current.indexOfFirst { it.uid == uid }
+        if (idx >= 0) {
+            current[idx] = current[idx].copy(isBillingExempt = isExempt)
+            saveLocalUsers(current)
+        }
+
+        return try {
+            val db = firestore
+            if (db != null) {
+                db.collection("users").document(uid)
+                    .update("isBillingExempt", isExempt)
+                    .await()
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating user isBillingExempt: ${e.message}", e)
+            Result.failure(e)
         }
     }
 

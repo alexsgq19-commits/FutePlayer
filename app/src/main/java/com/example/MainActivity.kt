@@ -32,6 +32,8 @@ import com.example.ui.screens.MoviesApiScreen
 import com.example.ui.screens.PlayerScreen
 import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.UserManagementScreen
+import com.example.ui.components.SubscriptionDialog
+import com.example.ui.components.PaymentHistoryDialog
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : AppCompatActivity() {
@@ -103,6 +105,10 @@ class MainActivity : AppCompatActivity() {
                         val currentScreen by viewModel.currentScreen.collectAsState()
                         val uiState by viewModel.uiState.collectAsState()
                         val castUiState by viewModel.castUiState.collectAsState()
+                        val showSubscriptionDialog by viewModel.showSubscriptionDialog.collectAsState()
+                        val subscriptionFlowState by viewModel.subscriptionFlowState.collectAsState()
+                        val showPaymentHistoryDialog by viewModel.showPaymentHistoryDialog.collectAsState()
+                        val allPayments by viewModel.allPayments.collectAsState()
 
                         when (currentScreen) {
                             is UiScreen.Home -> {
@@ -113,6 +119,9 @@ class MainActivity : AppCompatActivity() {
                                     allUsers = allUsers,
                                     onAccountClick = {
                                         showAccountDialog = true
+                                    },
+                                    onOpenRenewSubscription = {
+                                        viewModel.openSubscriptionDialog()
                                     },
                                     onOpenUserManagement = {
                                         viewModel.navigateTo(UiScreen.UserManagement)
@@ -265,7 +274,24 @@ class MainActivity : AppCompatActivity() {
                                     onBack = { viewModel.navigateTo(UiScreen.Home) },
                                     onRefresh = { viewModel.refreshUserPresence() },
                                     onSaveUser = { user, cb -> viewModel.saveUser(user, cb) },
-                                    onDeleteUser = { uid, cb -> viewModel.deleteUser(uid, cb) }
+                                    onDeleteUser = { uid, cb -> viewModel.deleteUser(uid, cb) },
+                                    onOpenPaymentHistory = { viewModel.openPaymentHistoryDialog() },
+                                    onManualPaymentApproval = { targetUser ->
+                                        val currentExp = if (targetUser.subscriptionExpiresAt > System.currentTimeMillis()) {
+                                            targetUser.subscriptionExpiresAt
+                                        } else {
+                                            System.currentTimeMillis()
+                                        }
+                                        val newExp = currentExp + (30L * 24 * 3600 * 1000L)
+                                        val updated = targetUser.copy(
+                                            subscriptionExpiresAt = newExp,
+                                            subscriptionStatus = "ACTIVE",
+                                            expirationDate = newExp,
+                                            lastPaymentAt = System.currentTimeMillis(),
+                                            lastPaymentId = "MANUAL_${System.currentTimeMillis()}"
+                                        )
+                                        viewModel.saveUser(updated) { _, _ -> }
+                                    }
                                 )
                             }
 
@@ -303,6 +329,9 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onPlayVideo = { video ->
                                         viewModel.playDirectVideo(video)
+                                    },
+                                    onAddToCatalog = { media ->
+                                        viewModel.addOrUpdateMedia(media)
                                     }
                                 )
                             }
@@ -325,9 +354,35 @@ class MainActivity : AppCompatActivity() {
                                 onChangePassword = { newPass, cb ->
                                     viewModel.changeCurrentUserPassword(newPass, cb)
                                 },
+                                onRenewSubscription = {
+                                    viewModel.openSubscriptionDialog()
+                                },
+                                onOpenPaymentHistory = {
+                                    viewModel.openPaymentHistoryDialog()
+                                },
                                 onLogout = {
                                     viewModel.logout()
                                 }
+                            )
+                        }
+
+                        if (showSubscriptionDialog) {
+                            SubscriptionDialog(
+                                user = currentUser,
+                                flowState = subscriptionFlowState,
+                                onStartPayment = { viewModel.startSubscriptionPayment(this@MainActivity) },
+                                onDismiss = { viewModel.dismissSubscriptionDialog() },
+                                onCheckStatus = { viewModel.checkSubscriptionStatusManually() },
+                                onSimulateAdminApproval = if (currentUser?.role == "ADMIN") {
+                                    { orderNsu -> viewModel.simulateAdminPaymentApproval(orderNsu) }
+                                } else null
+                            )
+                        }
+
+                        if (showPaymentHistoryDialog) {
+                            PaymentHistoryDialog(
+                                payments = allPayments,
+                                onDismiss = { viewModel.dismissPaymentHistoryDialog() }
                             )
                         }
                     }

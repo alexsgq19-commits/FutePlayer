@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -129,6 +130,19 @@ private val DarkCardBg = Color(0xFF1E293B)
 private val SurfaceDark = Color(0xFF131E30)
 
 @Composable
+private fun customTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = NeonCyan,
+    unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+    focusedLabelColor = NeonCyan,
+    unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
+    cursorColor = NeonCyan,
+    focusedTextColor = Color.White,
+    unfocusedTextColor = Color.White,
+    focusedContainerColor = SurfaceDark,
+    unfocusedContainerColor = SurfaceDark
+)
+
+@Composable
 fun MediaScreenContent(
     mediaList: List<MediaItem>,
     searchQuery: String,
@@ -199,6 +213,7 @@ fun MediaScreenContent(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .imePadding()
             .background(DarkBg)
     ) {
         // Filter Chips Row (Type: Todos, Filmes, Séries, Favoritos, Fora do Ar)
@@ -598,6 +613,7 @@ fun MediaScreenContent(
         if (media.type == MediaContentType.MOVIE) {
             MovieDetailDialog(
                 movie = media,
+                isAdmin = isAdmin,
                 onDismiss = {
                     selectedMediaForDetail = null
                     onDismissMedia()
@@ -605,11 +621,16 @@ fun MediaScreenContent(
                 onPlay = {
                     onPlayMovie(media)
                 },
-                onToggleFavorite = { onToggleFavorite(media.id) }
+                onToggleFavorite = { onToggleFavorite(media.id) },
+                onEdit = {
+                    mediaToEdit = media
+                    showAddDialog = true
+                }
             )
         } else {
             SeriesDetailDialog(
                 series = media,
+                isAdmin = isAdmin,
                 initialSeason = selectedSeason,
                 currentlyPlayingEpisode = selectedEpisode,
                 onDismiss = {
@@ -619,7 +640,11 @@ fun MediaScreenContent(
                 onPlayEpisode = { season, episode ->
                     onPlayEpisode(media, season, episode)
                 },
-                onToggleFavorite = { onToggleFavorite(media.id) }
+                onToggleFavorite = { onToggleFavorite(media.id) },
+                onEdit = {
+                    mediaToEdit = media
+                    showAddDialog = true
+                }
             )
         }
     }
@@ -978,8 +1003,33 @@ fun MediaCard(
                         )
                     }
 
+                    Spacer(modifier = Modifier.width(4.dp))
                     if (isAdmin) {
-                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(
+
+                            onClick = { onEditClick() },
+
+                            modifier = Modifier.size(32.dp)
+
+                        ) {
+
+                            Icon(
+
+                                imageVector = Icons.Filled.Edit,
+
+                                contentDescription = "Editar informações",
+
+                                tint = NeonCyan,
+
+                                modifier = Modifier.size(16.dp)
+
+                            )
+
+                        }
+
+                    }
+
+                    if (isAdmin) {
                         IconButton(
                             onClick = { onToggleWorkingStatus() },
                             modifier = Modifier.size(32.dp)
@@ -989,17 +1039,6 @@ fun MediaCard(
                                 contentDescription = if (media.isWorking) "Marcar como Fora do Ar" else "Marcar como Funcionando",
                                 tint = if (media.isWorking) Color(0xFF00E676) else Color(0xFFFF1744),
                                 modifier = Modifier.size(17.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = { onEditClick() },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Edit,
-                                contentDescription = "Editar",
-                                tint = NeonCyan,
-                                modifier = Modifier.size(16.dp)
                             )
                         }
                         IconButton(
@@ -1027,32 +1066,41 @@ fun MediaCard(
 @Composable
 fun MovieDetailDialog(
     movie: MediaItem,
+    isAdmin: Boolean,
     onDismiss: () -> Unit,
     onPlay: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    onEdit: () -> Unit = {}
 ) {
     val isOffline = !movie.isWorking
     val dialogScrollState = rememberScrollState()
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .fillMaxHeight(0.88f)
-                .clip(RoundedCornerShape(24.dp))
-                .border(
-                    BorderStroke(
-                        if (isOffline) 2.5.dp else 1.dp,
-                        if (isOffline) Color(0xFFFF1744) else NeonCyan.copy(alpha = 0.4f)
-                    ),
-                    RoundedCornerShape(24.dp)
-                ),
-            color = DarkCardBg,
-            shape = RoundedCornerShape(24.dp)
+                .fillMaxSize()
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 20.dp),
+            contentAlignment = Alignment.Center
         ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(24.dp))
+                    .border(
+                        BorderStroke(
+                            if (isOffline) 2.5.dp else 1.dp,
+                            if (isOffline) Color(0xFFFF1744) else NeonCyan.copy(alpha = 0.4f)
+                        ),
+                        RoundedCornerShape(24.dp)
+                    ),
+                color = DarkCardBg,
+                shape = RoundedCornerShape(24.dp)
+            ) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val totalHeight = maxHeight
 
@@ -1223,7 +1271,7 @@ fun MovieDetailDialog(
                     }
                 }
 
-                // Always-available Floating Header Buttons (Close & Favorite)
+                // Always-available Floating Header Buttons (Close, Edit, Favorite)
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -1248,20 +1296,55 @@ fun MovieDetailDialog(
                         )
                     }
 
-                    IconButton(
-                        onClick = onToggleFavorite,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.75f))
-                            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = if (movie.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                            contentDescription = "Favoritar",
-                            tint = if (movie.isFavorite) NeonPink else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (isAdmin) {
+                            IconButton(
+
+                                onClick = onEdit,
+
+                                modifier = Modifier
+
+                                    .size(38.dp)
+
+                                    .clip(CircleShape)
+
+                                    .background(Color.Black.copy(alpha = 0.75f))
+
+                                    .border(BorderStroke(1.dp, NeonCyan.copy(alpha = 0.6f)), CircleShape)
+
+                            ) {
+
+                                Icon(
+
+                                    imageVector = Icons.Filled.Edit,
+
+                                    contentDescription = "Editar informações",
+
+                                    tint = NeonCyan,
+
+                                    modifier = Modifier.size(18.dp)
+
+                                )
+
+                            }
+
+                        }
+
+                        IconButton(
+                            onClick = onToggleFavorite,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.75f))
+                                .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (movie.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                contentDescription = "Favoritar",
+                                tint = if (movie.isFavorite) NeonPink else Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
 
@@ -1295,6 +1378,7 @@ fun MovieDetailDialog(
         }
     }
 }
+}
 
 // =============================================================================
 // SERIES DETAIL DIALOG (WITH SEASONS & EPISODES)
@@ -1303,11 +1387,13 @@ fun MovieDetailDialog(
 @Composable
 fun SeriesDetailDialog(
     series: MediaItem,
+    isAdmin: Boolean,
     initialSeason: SeasonItem? = null,
     currentlyPlayingEpisode: EpisodeItem? = null,
     onDismiss: () -> Unit,
     onPlayEpisode: (SeasonItem, EpisodeItem) -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    onEdit: () -> Unit = {}
 ) {
     val isOffline = !series.isWorking
     val seasons = series.seasons.ifEmpty {
@@ -1331,23 +1417,30 @@ fun SeriesDetailDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .fillMaxSize(0.92f)
-                .clip(RoundedCornerShape(24.dp))
-                .border(
-                    BorderStroke(
-                        if (isOffline) 2.5.dp else 1.dp,
-                        if (isOffline) Color(0xFFFF1744) else NeonPurple.copy(alpha = 0.4f)
-                    ),
-                    RoundedCornerShape(24.dp)
-                ),
-            color = DarkCardBg,
-            shape = RoundedCornerShape(24.dp)
+                .fillMaxSize()
+                .imePadding()
+                .padding(horizontal = 14.dp, vertical = 18.dp),
+            contentAlignment = Alignment.Center
         ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(24.dp))
+                    .border(
+                        BorderStroke(
+                            if (isOffline) 2.5.dp else 1.dp,
+                            if (isOffline) Color(0xFFFF1744) else NeonPurple.copy(alpha = 0.4f)
+                        ),
+                        RoundedCornerShape(24.dp)
+                    ),
+                color = DarkCardBg,
+                shape = RoundedCornerShape(24.dp)
+            ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // Header Poster
                 Box(
@@ -1388,7 +1481,8 @@ fun SeriesDetailDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
                             onClick = onDismiss,
@@ -1400,18 +1494,37 @@ fun SeriesDetailDialog(
                             Icon(Icons.Filled.Close, contentDescription = "Fechar", tint = Color.White)
                         }
 
-                        IconButton(
-                            onClick = onToggleFavorite,
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.6f))
-                        ) {
-                            Icon(
-                                imageVector = if (series.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                                contentDescription = "Favoritar",
-                                tint = if (series.isFavorite) NeonPink else Color.White
-                            )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (isAdmin) {
+                                IconButton(
+                                    onClick = onEdit,
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.75f))
+                                        .border(BorderStroke(1.dp, NeonPurple.copy(alpha = 0.6f)), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Edit,
+                                        contentDescription = "Editar informações",
+                                        tint = NeonPurple,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = onToggleFavorite,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.6f))
+                            ) {
+                                Icon(
+                                    imageVector = if (series.isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = "Favoritar",
+                                    tint = if (series.isFavorite) NeonPink else Color.White
+                                )
+                            }
                         }
                     }
 
@@ -1570,6 +1683,7 @@ fun SeriesDetailDialog(
         }
     }
 }
+}
 
 @Composable
 fun EpisodeCard(
@@ -1578,6 +1692,7 @@ fun EpisodeCard(
     onPlay: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -1665,7 +1780,7 @@ fun EpisodeCard(
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
             // Play Button
             Box(
@@ -1758,12 +1873,14 @@ fun AddEditMediaDialog(
 
     Dialog(
         onDismissRequest = handleDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(0.96f)
-                .fillMaxSize(0.95f)
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .imePadding()
+                .padding(horizontal = 12.dp, vertical = 16.dp)
                 .clip(RoundedCornerShape(24.dp))
                 .border(1.dp, NeonCyan.copy(alpha = 0.5f), RoundedCornerShape(24.dp)),
             color = DarkCardBg,
@@ -2583,15 +2700,3 @@ fun AddEditMediaDialog(
     }
 }
 
-@Composable
-private fun customTextFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = NeonCyan,
-    unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-    focusedLabelColor = NeonCyan,
-    unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
-    cursorColor = NeonCyan,
-    focusedTextColor = Color.White,
-    unfocusedTextColor = Color.White,
-    focusedContainerColor = SurfaceDark,
-    unfocusedContainerColor = SurfaceDark
-)

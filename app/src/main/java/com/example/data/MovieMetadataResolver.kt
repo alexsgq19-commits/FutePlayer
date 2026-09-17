@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import com.example.data.models.PlayableVideo
+import com.example.data.models.isSeries
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -31,13 +32,49 @@ class MovieMetadataResolver(context: Context) {
         private const val PREFS_NAME = "movie_meta_cache_v1"
 
         private val IMDB_REGEX = Regex("(tt\\d{6,10})")
+        private val TMDB_REGEX = Regex("""(?:embedplayapi\.top/embed/|tmdb[=:/_]|tmdb_id["':\s]+|api_)(\d{4,9})""", RegexOption.IGNORE_CASE)
 
-        fun extractImdbId(text: String): String? {
+        @Volatile
+        private var instance: MovieMetadataResolver? = null
+
+        fun getInstance(context: Context): MovieMetadataResolver {
+            return instance ?: synchronized(this) {
+                instance ?: MovieMetadataResolver(context.applicationContext).also { instance = it }
+            }
+        }
+
+        fun extractImdbId(text: String?): String? {
+            if (text == null) return null
             return IMDB_REGEX.find(text)?.value
         }
 
-        fun getDefaultPosterUrl(imdbId: String): String {
-            return "https://images.metahub.space/poster/medium/$imdbId/img"
+        fun extractTmdbId(text: String?): String? {
+            if (text == null) return null
+            return TMDB_REGEX.find(text)?.groupValues?.get(1)
+        }
+
+        fun getDefaultPosterUrl(id: String): String {
+            return if (id.startsWith("tt")) {
+                "https://images.metahub.space/poster/medium/$id/img"
+            } else {
+                ""
+            }
+        }
+
+        fun isPlaceholderTitle(title: String): Boolean {
+            val trimmed = title.trim()
+            return trimmed.isBlank() ||
+                    trimmed.equals("null", ignoreCase = true) ||
+                    trimmed.equals("undefined", ignoreCase = true) ||
+                    trimmed.startsWith("Filme (IMDb", ignoreCase = true) ||
+                    trimmed.startsWith("Série (IMDb", ignoreCase = true) ||
+                    trimmed.startsWith("Filme (TMDB", ignoreCase = true) ||
+                    trimmed.startsWith("Série (TMDB", ignoreCase = true) ||
+                    trimmed.startsWith("Filme #", ignoreCase = true) ||
+                    trimmed.startsWith("Série #", ignoreCase = true) ||
+                    trimmed.matches(Regex("^(Filme|Série|Movie|Series)\\s*\\(?tt\\d+\\)?$", RegexOption.IGNORE_CASE)) ||
+                    trimmed.matches(Regex("^(Filme|Série|Movie|Series)\\s*\\(?\\d+\\)?$", RegexOption.IGNORE_CASE)) ||
+                    trimmed.matches(Regex("^tt\\d{6,10}$", RegexOption.IGNORE_CASE))
         }
     }
 
@@ -51,12 +88,12 @@ class MovieMetadataResolver(context: Context) {
         .followSslRedirects(true)
         .build()
 
-    fun getCached(imdbId: String): ResolvedMetadata? {
-        if (imdbId.isBlank()) return null
+    fun getCached(id: String): ResolvedMetadata? {
+        if (id.isBlank()) return null
 
-        memoryCache[imdbId]?.let { return it }
+        memoryCache[id]?.let { return it }
 
-        val cachedJson = prefs.getString(imdbId, null) ?: return null
+        val cachedJson = prefs.getString(id, null) ?: return null
         return try {
             val obj = JSONObject(cachedJson)
             val meta = ResolvedMetadata(
@@ -67,7 +104,7 @@ class MovieMetadataResolver(context: Context) {
                 category = obj.optString("category").takeIf { it.isNotBlank() }
             )
             if (meta.title.isNotBlank()) {
-                memoryCache[imdbId] = meta
+                memoryCache[id] = meta
                 meta
             } else {
                 null
@@ -77,9 +114,9 @@ class MovieMetadataResolver(context: Context) {
         }
     }
 
-    fun saveCache(imdbId: String, meta: ResolvedMetadata) {
-        if (imdbId.isBlank() || meta.title.isBlank()) return
-        memoryCache[imdbId] = meta
+    fun saveCache(id: String, meta: ResolvedMetadata) {
+        if (id.isBlank() || meta.title.isBlank()) return
+        memoryCache[id] = meta
         try {
             val obj = JSONObject().apply {
                 put("title", meta.title)
@@ -88,39 +125,58 @@ class MovieMetadataResolver(context: Context) {
                 put("isSeries", meta.isSeries)
                 put("category", meta.category ?: "")
             }
-            prefs.edit().putString(imdbId, obj.toString()).apply()
+            prefs.edit().putString(id, obj.toString()).apply()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed saving meta cache for $imdbId: ${e.message}")
+            Log.w(TAG, "Failed saving meta cache for $id: ${e.message}")
         }
     }
 
-    suspend fun resolve(imdbId: String, isSeriesHint: Boolean = false): ResolvedMetadata? = withContext(Dispatchers.IO) {
-        val cleanId = imdbId.trim()
-        if (!cleanId.startsWith("tt")) return@withContext null
+    suspend fun resolve(id: String, isSeriesHint: Boolean = false): ResolvedMetadata? = withContext(Dispatchers.IO) {
+        val cleanId = id.trim()
+        if (cleanId.isBlank()) return@withContext null
 
         getCached(cleanId)?.let { return@withContext it }
 
-        // 1. Primary: Official IMDb suggestion API (lightning fast, high-res posters)
-        val imdbResult = fetchFromImdbSuggestion(cleanId, isSeriesHint)
-        if (imdbResult != null && imdbResult.title.isNotBlank()) {
-            saveCache(cleanId, imdbResult)
-            return@withContext imdbResult
+        var result: ResolvedMetadata? = null
+
+        // 1. If starts with "tt", query fast Suggestion APIs (IMDb, Cinemeta, TVMaze)
+        if (cleanId.startsWith("tt")) {
+            result = fetchFromImdbSuggestion(cleanId, isSeriesHint)
+            if (result == null || result.title.isBlank()) {
+                result = fetchFromCinemeta(cleanId, isSeriesHint)
+            }
+            if ((result == null || result.title.isBlank()) && isSeriesHint) {
+                result = fetchFromTvMaze(cleanId)
+            }
         }
 
-        // 2. Secondary: Cinemeta API (official Stremio open catalog)
-        val cinemetaResult = fetchFromCinemeta(cleanId, isSeriesHint)
-        if (cinemetaResult != null && cinemetaResult.title.isNotBlank()) {
-            saveCache(cleanId, cinemetaResult)
-            return@withContext cinemetaResult
+        // 2. Direct lookup via EmbedplayApi (gives exact Portuguese series/movie title from <title> tag)
+        if (result == null || result.title.isBlank()) {
+            result = fetchFromEmbedPlayApi(cleanId, isSeriesHint)
         }
 
-        // 3. Fallback: if title cannot be fetched, at least guarantee official poster
-        val fallbackMeta = ResolvedMetadata(
-            title = "",
-            posterUrl = getDefaultPosterUrl(cleanId),
-            isSeries = isSeriesHint
-        )
-        fallbackMeta
+        // 3. If TV Series with numeric TMDB/TVDB ID, try TVMaze
+        if ((result == null || result.title.isBlank()) && isSeriesHint && cleanId.all { it.isDigit() }) {
+            result = fetchFromTvMazeTvdb(cleanId)
+        }
+
+        if (result != null && result.title.isNotBlank()) {
+            saveCache(cleanId, result)
+            return@withContext result
+        }
+
+        // Fallback: provide default poster if available
+        val fallbackPoster = getDefaultPosterUrl(cleanId).takeIf { it.isNotBlank() }
+        if (fallbackPoster != null) {
+            val fallbackMeta = ResolvedMetadata(
+                title = "",
+                posterUrl = fallbackPoster,
+                isSeries = isSeriesHint
+            )
+            return@withContext fallbackMeta
+        }
+
+        null
     }
 
     private fun fetchFromImdbSuggestion(imdbId: String, isSeriesHint: Boolean): ResolvedMetadata? {
@@ -142,9 +198,17 @@ class MovieMetadataResolver(context: Context) {
             val dArray = root.optJSONArray("d") ?: return null
             if (dArray.length() == 0) return null
 
-            val item = dArray.getJSONObject(0)
+            var matchedItem: JSONObject? = null
+            for (k in 0 until dArray.length()) {
+                val candidate = dArray.optJSONObject(k) ?: continue
+                if (candidate.optString("id").equals(imdbId, ignoreCase = true)) {
+                    matchedItem = candidate
+                    break
+                }
+            }
+            val item = matchedItem ?: dArray.getJSONObject(0)
             val title = item.optString("l").trim()
-            if (title.isBlank()) return null
+            if (title.isBlank() || title.equals("null", ignoreCase = true)) return null
 
             val posterObj = item.optJSONObject("i")
             val posterUrl = posterObj?.optString("imageUrl")?.trim().takeIf { !it.isNullOrBlank() }
@@ -166,6 +230,35 @@ class MovieMetadataResolver(context: Context) {
             )
         } catch (e: Exception) {
             Log.d(TAG, "IMDb suggestion fetch failed for $imdbId: ${e.message}")
+            null
+        }
+    }
+
+    private fun fetchFromTvMaze(imdbId: String): ResolvedMetadata? {
+        return try {
+            val url = "https://api.tvmaze.com/lookup/shows?imdb=$imdbId"
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+            val resp = httpClient.newCall(req).execute()
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            val obj = JSONObject(body)
+            val name = obj.optString("name").trim()
+            if (name.isBlank()) return null
+            val imageObj = obj.optJSONObject("image")
+            val poster = imageObj?.optString("original") ?: imageObj?.optString("medium")
+            val premiered = obj.optString("premiered", "")
+            val year = if (premiered.length >= 4) premiered.take(4) else null
+            ResolvedMetadata(
+                title = name,
+                posterUrl = poster,
+                year = year,
+                isSeries = true,
+                category = "Séries"
+            )
+        } catch (_: Exception) {
             null
         }
     }
@@ -211,6 +304,78 @@ class MovieMetadataResolver(context: Context) {
         return null
     }
 
+    private fun fetchFromEmbedPlayApi(id: String, isSeriesHint: Boolean): ResolvedMetadata? {
+        return try {
+            val url = "https://embedplayapi.top/embed/$id"
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .build()
+
+            val resp = httpClient.newCall(req).execute()
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+
+            // Extracts title from:
+            // <title>Assistir Synden [S01E01] - Você Foi Avisado Online</title>
+            // <title>Assistir Capitanes de America [S01E01] - Episódio 1 Online</title>
+            // <title>Assistir Avatar: Fogo e Cinzas - 2025 Online</title>
+            val titleRegex = Regex("""<title>\s*Assistir\s+([^\[<\r\n]+?)(?:\s*\[|\s*-\s*\d{4}|\s*Online|</title>)""", RegexOption.IGNORE_CASE)
+            val match = titleRegex.find(body)
+            var extractedTitle = match?.groupValues?.get(1)?.trim() ?: ""
+
+            if (extractedTitle.isBlank()) {
+                val fallbackRegex = Regex("""<title>([^<\r\n]+?)(?:\s*-\s*Api\s+de\s+streaming|</title>)""", RegexOption.IGNORE_CASE)
+                extractedTitle = fallbackRegex.find(body)?.groupValues?.get(1)?.replace("Assistir", "")?.trim() ?: ""
+            }
+
+            if (extractedTitle.isBlank() || extractedTitle.equals("null", ignoreCase = true)) return null
+
+            val isSeries = isSeriesHint || body.contains("S01E01", ignoreCase = true) || body.contains("temporada", ignoreCase = true)
+            val posterUrl = getDefaultPosterUrl(id).takeIf { it.isNotBlank() }
+
+            ResolvedMetadata(
+                title = extractedTitle,
+                posterUrl = posterUrl,
+                isSeries = isSeries,
+                category = if (isSeries) "Séries" else "Filmes"
+            )
+        } catch (e: Exception) {
+            Log.d(TAG, "EmbedplayApi title fetch failed for $id: ${e.message}")
+            null
+        }
+    }
+
+    private fun fetchFromTvMazeTvdb(tvdbOrTmdbId: String): ResolvedMetadata? {
+        return try {
+            val url = "https://api.tvmaze.com/lookup/shows?thetvdb=$tvdbOrTmdbId"
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0")
+                .build()
+            val resp = httpClient.newCall(req).execute()
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            val obj = JSONObject(body)
+            val name = obj.optString("name").trim()
+            if (name.isBlank()) return null
+            val imageObj = obj.optJSONObject("image")
+            val poster = imageObj?.optString("original") ?: imageObj?.optString("medium")
+            val premiered = obj.optString("premiered", "")
+            val year = if (premiered.length >= 4) premiered.take(4) else null
+            ResolvedMetadata(
+                title = name,
+                posterUrl = poster,
+                year = year,
+                isSeries = true,
+                category = "Séries"
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun enrichVideosBatch(
         videos: List<PlayableVideo>,
         onProgress: (List<PlayableVideo>) -> Unit
@@ -223,12 +388,13 @@ class MovieMetadataResolver(context: Context) {
         // Pass 1: Apply all cached metadata instantly (0ms latency)
         for (i in mutableList.indices) {
             val v = mutableList[i]
-            val imdbId = extractImdbId(v.id) ?: extractImdbId(v.streamUrl) ?: extractImdbId(v.title)
-            if (!imdbId.isNullOrBlank()) {
-                val cached = getCached(imdbId)
+            val mediaId = extractImdbId(v.id) ?: extractImdbId(v.streamUrl) ?: extractImdbId(v.embedUrl)
+                ?: extractImdbId(v.title) ?: extractTmdbId(v.id) ?: extractTmdbId(v.streamUrl) ?: extractTmdbId(v.embedUrl)
+            if (!mediaId.isNullOrBlank()) {
+                val cached = getCached(mediaId)
                 if (cached != null) {
                     val newTitle = if (isPlaceholderTitle(v.title)) cached.title else v.title
-                    val newPoster = v.posterUrl ?: cached.posterUrl ?: getDefaultPosterUrl(imdbId)
+                    val newPoster = v.posterUrl ?: cached.posterUrl ?: getDefaultPosterUrl(mediaId).takeIf { it.isNotBlank() }
                     val newSubtitle = if (cached.year != null) {
                         if (cached.isSeries) "Série (${cached.year})" else "Filme (${cached.year})"
                     } else v.subtitle
@@ -243,9 +409,9 @@ class MovieMetadataResolver(context: Context) {
                         )
                         changed = true
                     }
-                } else if (v.posterUrl.isNullOrBlank()) {
-                    // Instantly set high-res poster from metahub even before title is resolved!
-                    mutableList[i] = v.copy(posterUrl = getDefaultPosterUrl(imdbId))
+                } else if (v.posterUrl.isNullOrBlank() && mediaId.startsWith("tt")) {
+                    // Instantly set high-res poster from metahub even before title is resolved
+                    mutableList[i] = v.copy(posterUrl = getDefaultPosterUrl(mediaId))
                     changed = true
                 }
             }
@@ -255,15 +421,22 @@ class MovieMetadataResolver(context: Context) {
             onProgress(mutableList.toList())
         }
 
-        // Pass 2: Identify uncached items that need resolution (limit to first 120 items to preserve bandwidth)
+        // Pass 2: Identify uncached items that need resolution
         val toResolveIndices = mutableListOf<Pair<Int, String>>()
         for (i in mutableList.indices) {
             val v = mutableList[i]
             if (isPlaceholderTitle(v.title)) {
-                val imdbId = extractImdbId(v.id) ?: extractImdbId(v.streamUrl) ?: extractImdbId(v.title)
-                if (!imdbId.isNullOrBlank() && getCached(imdbId) == null) {
-                    toResolveIndices.add(Pair(i, imdbId))
-                    if (toResolveIndices.size >= 120) break
+                val mediaId = extractImdbId(v.id)
+                    ?: extractImdbId(v.streamUrl)
+                    ?: extractImdbId(v.embedUrl)
+                    ?: extractImdbId(v.title)
+                    ?: extractImdbId(v.subtitle)
+                    ?: extractTmdbId(v.id)
+                    ?: extractTmdbId(v.streamUrl)
+                    ?: extractTmdbId(v.embedUrl)
+                if (!mediaId.isNullOrBlank() && getCached(mediaId) == null) {
+                    toResolveIndices.add(Pair(i, mediaId))
+                    if (toResolveIndices.size >= 250) break
                 }
             }
         }
@@ -277,19 +450,18 @@ class MovieMetadataResolver(context: Context) {
 
         for (chunk in chunks) {
             var chunkChanged = false
-            chunk.map { (index, imdbId) ->
+            chunk.map { (index, mediaId) ->
                 async {
                     semaphore.withPermit {
-                        val isSeries = mutableList[index].category?.contains("série", ignoreCase = true) == true ||
-                                mutableList[index].subtitle.contains("série", ignoreCase = true)
-                        val resolved = resolve(imdbId, isSeries)
+                        val isSeries = mutableList[index].isSeries
+                        val resolved = resolve(mediaId, isSeries)
                         if (resolved != null && resolved.title.isNotBlank()) {
                             val cur = mutableList[index]
                             val newSubtitle = if (resolved.year != null) {
                                 if (resolved.isSeries) "Série (${resolved.year})" else "Filme (${resolved.year})"
                             } else cur.subtitle
                             val newCategory = cur.category?.takeIf { !it.contains("API", ignoreCase = true) } ?: resolved.category ?: cur.category
-                            val newPoster = resolved.posterUrl ?: cur.posterUrl ?: getDefaultPosterUrl(imdbId)
+                            val newPoster = resolved.posterUrl ?: cur.posterUrl ?: getDefaultPosterUrl(mediaId).takeIf { it.isNotBlank() }
 
                             mutableList[index] = cur.copy(
                                 title = resolved.title,
@@ -307,17 +479,5 @@ class MovieMetadataResolver(context: Context) {
                 onProgress(mutableList.toList())
             }
         }
-    }
-
-    private fun isPlaceholderTitle(title: String): Boolean {
-        val trimmed = title.trim()
-        return trimmed.isBlank() ||
-                trimmed.startsWith("Filme (IMDb", ignoreCase = true) ||
-                trimmed.startsWith("Série (IMDb", ignoreCase = true) ||
-                trimmed.startsWith("Filme (TMDB", ignoreCase = true) ||
-                trimmed.startsWith("Série (TMDB", ignoreCase = true) ||
-                trimmed.startsWith("Filme #", ignoreCase = true) ||
-                trimmed.startsWith("Série #", ignoreCase = true) ||
-                trimmed.matches(Regex("^(Filme|Série|Movie|Series)\\s*\\(?tt\\d+\\)?$", RegexOption.IGNORE_CASE))
     }
 }

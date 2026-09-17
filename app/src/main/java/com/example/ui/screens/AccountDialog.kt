@@ -3,22 +3,24 @@ package com.example.ui.screens
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.SupervisorAccount
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.models.User
 import com.example.ui.theme.StadiumGreenPrimary
 
@@ -31,6 +33,8 @@ fun AccountDialog(
     onDismiss: () -> Unit,
     onOpenUserManagement: () -> Unit,
     onChangePassword: (newPassword: String, onResult: (Boolean, String?) -> Unit) -> Unit = { _, _ -> },
+    onRenewSubscription: () -> Unit = {},
+    onOpenPaymentHistory: () -> Unit = {},
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
@@ -41,10 +45,16 @@ fun AccountDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        modifier = Modifier
+            .fillMaxWidth(0.94f)
+            .imePadding(),
         title = { Text("Minha Conta", fontWeight = FontWeight.Bold) },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
@@ -72,6 +82,76 @@ fun AccountDialog(
                     color = StadiumGreenPrimary,
                     fontWeight = FontWeight.SemiBold
                 )
+
+                // Status da Assinatura
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        val isExempt = user.isBillingExempt || !user.isBillingEnabled
+                        val isExpired = !user.canAccessPremiumContent()
+                        val isUserAdmin = user.role == "ADMIN"
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Payments,
+                                contentDescription = null,
+                                tint = if (isUserAdmin || isExempt) StadiumGreenPrimary
+                                else if (isExpired) Color(0xFFFF1744)
+                                else StadiumGreenPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isUserAdmin) "Assinatura: Admin (Acesso Total)"
+                                else if (isExempt) "Assinatura: Isento (Acesso Total)"
+                                else if (isExpired) "Assinatura: VENCIDA"
+                                else "Assinatura: ATIVA",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isUserAdmin || isExempt) StadiumGreenPrimary
+                                else if (isExpired) Color(0xFFFF1744)
+                                else StadiumGreenPrimary
+                            )
+                        }
+
+                        if (!isUserAdmin && !isExempt) {
+                            Text(
+                                text = "Vencimento: ${user.getFormattedExpirationDate()} • R$ 10,00/30 dias",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Button(
+                                onClick = {
+                                    onDismiss()
+                                    onRenewSubscription()
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
+                                modifier = Modifier.fillMaxWidth().height(42.dp)
+                            ) {
+                                Icon(Icons.Default.Payment, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("RENOVAR POR R$ 10,00", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+
+                        TextButton(
+                            onClick = {
+                                onDismiss()
+                                onOpenPaymentHistory()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.ReceiptLong, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Ver Histórico de Pagamentos", fontSize = 12.sp)
+                        }
+                    }
+                }
 
                 Divider(modifier = Modifier.padding(vertical = 4.dp))
 
@@ -183,6 +263,10 @@ fun AccountDialog(
             onDismissRequest = {
                 if (!isSubmitting) showChangePasswordDialog = false
             },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .imePadding(),
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Lock, contentDescription = null, tint = StadiumGreenPrimary)
@@ -192,7 +276,9 @@ fun AccountDialog(
             },
             text = {
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     // Validação de senha atual se já houver senha cadastrada

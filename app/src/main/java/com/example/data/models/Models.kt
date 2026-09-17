@@ -52,6 +52,22 @@ data class PlayableVideo(
     val isWorking: Boolean = true
 )
 
+val PlayableVideo.isSeries: Boolean
+    get() {
+        val cat = category?.lowercase() ?: ""
+        val sub = subtitle.lowercase()
+        val vidId = id.lowercase()
+        val t = title.lowercase()
+        return cat.contains("série") || cat.contains("serie") || cat.contains("series") ||
+                cat.contains("novela") || cat.contains("anime") || cat.contains("tv") ||
+                cat.contains("temporada") ||
+                sub.contains("série") || sub.contains("serie") || sub.contains("series") ||
+                sub.contains("temporada") || sub.contains("episódio") || sub.contains("episodio") ||
+                vidId.startsWith("series") || vidId.contains("_series_") ||
+                t.contains("temporada") || t.contains("season") ||
+                t.contains(Regex("""\b(s\d{1,2}\s*e\d{1,2}|t\d{1,2}\s*:\s*e\d{1,2}|ep\s*\d+)\b""", RegexOption.IGNORE_CASE))
+    }
+
 enum class StreamFormat {
     HLS_M3U8,
     MP4,

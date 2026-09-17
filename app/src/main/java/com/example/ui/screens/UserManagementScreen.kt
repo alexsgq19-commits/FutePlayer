@@ -1,5 +1,11 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -9,9 +15,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -20,12 +28,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.models.User
 import com.example.ui.theme.StadiumGreenPrimary
 import com.example.util.SearchUtils
@@ -47,7 +58,9 @@ fun UserManagementScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit = {},
     onSaveUser: (User, (Boolean, String?) -> Unit) -> Unit,
-    onDeleteUser: (String, (Boolean, String?) -> Unit) -> Unit
+    onDeleteUser: (String, (Boolean, String?) -> Unit) -> Unit,
+    onOpenPaymentHistory: () -> Unit = {},
+    onManualPaymentApproval: ((User) -> Unit)? = null
 ) {
     var showAddEditDialog by remember { mutableStateOf(false) }
     var selectedUserForEdit by remember { mutableStateOf<User?>(null) }
@@ -109,6 +122,9 @@ fun UserManagementScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenPaymentHistory) {
+                        Icon(Icons.Default.ReceiptLong, contentDescription = "Histórico de Pagamentos", tint = StadiumGreenPrimary)
+                    }
                     IconButton(onClick = {
                         onRefresh()
                         snackbarMessage = "Status de presença atualizado!"
@@ -138,6 +154,7 @@ fun UserManagementScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .imePadding()
                 .background(MaterialTheme.colorScheme.background)
         ) {
             LazyColumn(
@@ -587,6 +604,138 @@ fun UserManagementScreen(
                                     )
                                 }
 
+                                // Status de Cobrança / Assinatura
+                                val isExempt = user.isBillingExempt || !user.isBillingEnabled
+                                val isExpired = !user.canAccessPremiumContent(currentTime)
+                                val isUserAdmin = user.role == "ADMIN"
+
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isUserAdmin || isExempt) StadiumGreenPrimary.copy(alpha = 0.3f)
+                                        else if (isExpired) Color(0xFFFF1744).copy(alpha = 0.5f)
+                                        else StadiumGreenPrimary.copy(alpha = 0.3f)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Payments,
+                                                        contentDescription = null,
+                                                        tint = if (isUserAdmin) StadiumGreenPrimary
+                                                        else if (isExempt) Color(0xFF64B5F6)
+                                                        else if (isExpired) Color(0xFFFF1744)
+                                                        else StadiumGreenPrimary,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = if (isUserAdmin) "Assinatura: Admin (Permanente)"
+                                                        else if (isExempt) "Assinatura: Isento de Cobrança"
+                                                        else if (isExpired) "Assinatura: VENCIDA"
+                                                        else "Assinatura: ATIVA (Em dia)",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (isUserAdmin) StadiumGreenPrimary
+                                                        else if (isExempt) Color(0xFF64B5F6)
+                                                        else if (isExpired) Color(0xFFFF1744)
+                                                        else StadiumGreenPrimary
+                                                    )
+                                                }
+
+                                                if (!isUserAdmin && !isExempt) {
+                                                    Text(
+                                                        text = "Vencimento: ${user.getFormattedExpirationDate()} • R$ 10,00/30d",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    if (user.lastPaymentAt > 0L || user.lastPaymentDate > 0L) {
+                                                        val lastPay = if (user.lastPaymentAt > 0L) user.lastPaymentAt else user.lastPaymentDate
+                                                        val sdf = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale("pt", "BR"))
+                                                        Text(
+                                                            text = "Último pagto: ${sdf.format(java.util.Date(lastPay))}${if (user.lastPaymentId.isNotBlank()) " (ID: ${user.lastPaymentId.takeLast(8)})" else ""}",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            // Se for usuário normal (não admin), permite alternar Isenção diretamente
+                                            if (!isUserAdmin) {
+                                                Column(horizontalAlignment = Alignment.End) {
+                                                    Text(
+                                                        text = if (user.isBillingExempt) "Isento (SIM)" else "Isentar?",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontSize = 10.sp,
+                                                        color = if (user.isBillingExempt) Color(0xFF64B5F6) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Switch(
+                                                        checked = user.isBillingExempt,
+                                                        onCheckedChange = { exempt ->
+                                                            val updated = user.copy(
+                                                                isBillingExempt = exempt,
+                                                                isBillingEnabled = !exempt
+                                                            )
+                                                            onSaveUser(updated) { success, err ->
+                                                                snackbarMessage = if (success) {
+                                                                    if (exempt) "Usuário '${user.name}' marcado como ISENTO!"
+                                                                    else "Isenção desativada para '${user.name}'."
+                                                                } else {
+                                                                    err ?: "Erro ao atualizar isenção."
+                                                                }
+                                                            }
+                                                        },
+                                                        colors = SwitchDefaults.colors(
+                                                            checkedThumbColor = Color(0xFF64B5F6),
+                                                            checkedTrackColor = Color(0xFF64B5F6).copy(alpha = 0.4f)
+                                                        ),
+                                                        modifier = Modifier.scale(0.75f)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        // Botão para o Admin Aprovar Pagamento Manual (+30 dias)
+                                        if (!isUserAdmin && !isExempt && onManualPaymentApproval != null) {
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Aprovação Manual (PIX/Dinheiro):",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                OutlinedButton(
+                                                    onClick = { onManualPaymentApproval(user) },
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                    modifier = Modifier.height(30.dp)
+                                                ) {
+                                                    Icon(Icons.Default.AddTask, contentDescription = null, tint = StadiumGreenPrimary, modifier = Modifier.size(14.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("Aprovar +30d", fontSize = 11.sp, color = StadiumGreenPrimary, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Botões de Ações (Senha, Editar, Excluir)
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -690,20 +839,39 @@ fun AddEditUserDialog(
     onDismiss: () -> Unit,
     onSave: (User) -> Unit
 ) {
+    val context = LocalContext.current
+    val dateFormat = remember { java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("pt", "BR")) }
+
     var name by remember { mutableStateOf(userToEdit?.name ?: "") }
     var cpf by remember { mutableStateOf(userToEdit?.cpf ?: "") }
     var phone by remember { mutableStateOf(userToEdit?.phone ?: "") }
     var password by remember { mutableStateOf(userToEdit?.password ?: "") }
     var role by remember { mutableStateOf(userToEdit?.role ?: "USER") }
     var isActive by remember { mutableStateOf(userToEdit?.isActive ?: true) }
+    
+    var isBillingEnabled by remember { mutableStateOf(userToEdit?.isBillingEnabled ?: true) }
+    var expirationDate by remember { mutableStateOf(userToEdit?.getEffectiveExpirationDate() ?: (System.currentTimeMillis() + 30L * 24L * 3600L * 1000L)) }
+    var expirationDateStr by remember { mutableStateOf(dateFormat.format(java.util.Date(expirationDate))) }
+
+    val initialFee = userToEdit?.monthlyFee ?: 10.0
+    var monthlyFeeStr by remember { 
+        mutableStateOf(if (initialFee % 1.0 == 0.0) initialFee.toInt().toString() else String.format(java.util.Locale.US, "%.2f", initialFee)) 
+    }
+
     var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        modifier = Modifier
+            .fillMaxWidth(0.94f)
+            .imePadding(),
         title = { Text(if (userToEdit == null) "Novo Usuário" else "Editar Usuário") },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedTextField(
@@ -767,6 +935,121 @@ fun AddEditUserDialog(
                     )
                 }
 
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                // Seção Cobrança Mensal
+                Text("Cobrança Mensal", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = StadiumGreenPrimary)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Cobrar Usuário:", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = if (isBillingEnabled) "Mensalidade no dia do cadastro" else "Isento de cobrança",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isBillingEnabled) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isBillingEnabled,
+                        onCheckedChange = { isBillingEnabled = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = StadiumGreenPrimary, checkedTrackColor = StadiumGreenPrimary.copy(alpha = 0.5f))
+                    )
+                }
+
+                AnimatedVisibility(visible = isBillingEnabled) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Edição Direta da Data de Vencimento
+                        OutlinedTextField(
+                            value = expirationDateStr,
+                            onValueChange = { input ->
+                                expirationDateStr = input
+                                try {
+                                    val trimmed = input.trim()
+                                    if (trimmed.length == 10) {
+                                        val parsed = dateFormat.parse(trimmed)
+                                        if (parsed != null) {
+                                            expirationDate = parsed.time
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            },
+                            label = { Text("Data de Vencimento (DD/MM/AAAA)") },
+                            placeholder = { Text("Ex: 25/10/2026") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Event, contentDescription = null, tint = StadiumGreenPrimary)
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // Ajuste Rápido
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Atalhos para Ajuste de Data:", style = MaterialTheme.typography.labelSmall)
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            expirationDate += (30L * 24 * 3600 * 1000L)
+                                            expirationDateStr = dateFormat.format(java.util.Date(expirationDate))
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(4.dp)
+                                    ) {
+                                        Text("+30d", fontSize = 11.sp)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            expirationDate += (15L * 24 * 3600 * 1000L)
+                                            expirationDateStr = dateFormat.format(java.util.Date(expirationDate))
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(4.dp)
+                                    ) {
+                                        Text("+15d", fontSize = 11.sp)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            expirationDate = System.currentTimeMillis() - 1000L
+                                            expirationDateStr = dateFormat.format(java.util.Date(expirationDate))
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(4.dp)
+                                    ) {
+                                        Text("Vencido", fontSize = 11.sp, color = Color.Red)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Edição do Valor de Mensalidade
+                        OutlinedTextField(
+                            value = monthlyFeeStr,
+                            onValueChange = { monthlyFeeStr = it },
+                            label = { Text("Valor Mensalidade (R$)") },
+                            placeholder = { Text("Ex: 10.00 ou 15,00") },
+                            leadingIcon = {
+                                Icon(Icons.Default.AttachMoney, contentDescription = null, tint = StadiumGreenPrimary)
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
                 if (error != null) {
                     Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -779,13 +1062,20 @@ fun AddEditUserDialog(
                         error = "Preencha Nome, Senha e pelo menos Celular ou CPF."
                         return@Button
                     }
+                    val cleanFee = monthlyFeeStr.replace(",", ".").trim()
+                    val parsedFee = cleanFee.toDoubleOrNull() ?: 10.0
                     val user = (userToEdit ?: User()).copy(
                         name = name.trim(),
                         cpf = cpf.trim(),
                         phone = phone.trim(),
                         password = password.trim(),
                         role = role,
-                        isActive = isActive
+                        isActive = isActive,
+                        isBillingEnabled = isBillingEnabled,
+                        isBillingExempt = !isBillingEnabled,
+                        expirationDate = expirationDate,
+                        subscriptionExpiresAt = expirationDate,
+                        monthlyFee = parsedFee
                     )
                     onSave(user)
                 },
@@ -813,10 +1103,16 @@ fun ChangePasswordDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        modifier = Modifier
+            .fillMaxWidth(0.94f)
+            .imePadding(),
         title = { Text("Mudar Senha de ${user.name}") },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedTextField(

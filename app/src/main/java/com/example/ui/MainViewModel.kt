@@ -11,7 +11,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.cast.CastManager
 import com.example.cast.CastUiState
 import com.example.data.FutemaisRepository
+import com.example.data.UserRepository
 import com.example.data.MoviesRepository
+import com.example.data.models.User
 import com.example.data.models.MovieItem
 import com.example.data.models.AutoCorrectionLog
 import com.example.data.models.ChannelOption
@@ -23,6 +25,12 @@ import com.example.data.models.MediaItem
 import com.example.data.models.OFFLINE_FALLBACK_URL
 import com.example.data.models.PlayableVideo
 import com.example.data.models.SeasonItem
+import com.example.data.SubscriptionRepository
+import com.example.data.models.PaymentOrder
+import com.example.data.models.PaymentRecord
+import com.example.ui.components.SubscriptionFlowState
+import android.net.Uri
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,8 +40,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-import com.example.data.UserRepository
-import com.example.data.models.User
 import com.example.notifications.AppNotificationManager
 import com.example.util.SearchUtils
 import kotlinx.coroutines.delay
@@ -167,6 +173,131 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _loginNoticeMessage.value = null
     }
 
+    val subscriptionRepository = SubscriptionRepository(application)
+
+    private val _subscriptionFlowState = MutableStateFlow<SubscriptionFlowState>(SubscriptionFlowState.Idle)
+    val subscriptionFlowState: StateFlow<SubscriptionFlowState> = _subscriptionFlowState.asStateFlow()
+
+    private val _showSubscriptionDialog = MutableStateFlow(false)
+    val showSubscriptionDialog: StateFlow<Boolean> = _showSubscriptionDialog.asStateFlow()
+
+    private val _showPaymentHistoryDialog = MutableStateFlow(false)
+    val showPaymentHistoryDialog: StateFlow<Boolean> = _showPaymentHistoryDialog.asStateFlow()
+
+    val allPayments: StateFlow<List<PaymentRecord>> = subscriptionRepository.observeAllPayments()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private var activePaymentOrderJob: kotlinx.coroutines.Job? = null
+
+    fun openSubscriptionDialog() {
+        _subscriptionFlowState.value = SubscriptionFlowState.Idle
+        _showSubscriptionDialog.value = true
+    }
+
+    fun dismissSubscriptionDialog() {
+        _showSubscriptionDialog.value = false
+        if (_subscriptionFlowState.value is SubscriptionFlowState.Success) {
+            _subscriptionFlowState.value = SubscriptionFlowState.Idle
+        }
+    }
+
+    fun openPaymentHistoryDialog() {
+        _showPaymentHistoryDialog.value = true
+    }
+
+    fun dismissPaymentHistoryDialog() {
+        _showPaymentHistoryDialog.value = false
+    }
+
+    fun startSubscriptionPayment(context: Context) {
+        val user = _currentUser.value
+        if (user == null) {
+            _subscriptionFlowState.value = SubscriptionFlowState.Error("Usuário não autenticado.")
+            return
+        }
+
+        viewModelScope.launch {
+            _subscriptionFlowState.value = SubscriptionFlowState.CreatingCheckout
+            val result = subscriptionRepository.createCheckout(user)
+            result.onSuccess { order ->
+                _subscriptionFlowState.value = SubscriptionFlowState.AwaitingPayment(order)
+
+                // Abre o checkout no navegador
+                if (order.checkoutUrl.isNotBlank()) {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(order.checkoutUrl)).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Log.e("MainViewModel", "Erro ao abrir navegador: ${e.message}")
+                    }
+                }
+
+                // Inicia escuta em tempo real do pedido no Firestore
+                observeOrderCompletion(order.orderNsu)
+            }.onFailure { err ->
+                _subscriptionFlowState.value = SubscriptionFlowState.Error(
+                    err.localizedMessage ?: "Erro ao gerar link de pagamento na InfinitePay."
+                )
+            }
+        }
+    }
+
+    private fun observeOrderCompletion(orderNsu: String) {
+        activePaymentOrderJob?.cancel()
+        activePaymentOrderJob = viewModelScope.launch {
+            subscriptionRepository.observePaymentOrder(orderNsu).collect { order ->
+                if (order != null && order.status.equals("PAID", ignoreCase = true)) {
+                    _subscriptionFlowState.value = SubscriptionFlowState.Success(
+                        "Assinatura renovada com sucesso! Seu acesso foi estendido por 30 dias."
+                    )
+                }
+            }
+        }
+    }
+
+    fun checkSubscriptionStatusManually() {
+        val user = _currentUser.value ?: return
+        viewModelScope.launch {
+            userRepository.observeUser(user.uid).collect { updated ->
+                if (updated != null) {
+                    _currentUser.value = updated
+                    if (updated.canAccessPremiumContent()) {
+                        _subscriptionFlowState.value = SubscriptionFlowState.Success(
+                            "Assinatura ativa e confirmada!"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun simulateAdminPaymentApproval(orderNsu: String) {
+        viewModelScope.launch {
+            val result = subscriptionRepository.simulateWebhookProcessing(orderNsu)
+            result.onSuccess { msg ->
+                _subscriptionFlowState.value = SubscriptionFlowState.Success(msg)
+            }.onFailure { err ->
+                _subscriptionFlowState.value = SubscriptionFlowState.Error(
+                    err.message ?: "Erro ao processar simulação de webhook."
+                )
+            }
+        }
+    }
+
+    fun setUserBillingExempt(targetUser: User, isExempt: Boolean, onResult: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            val result = userRepository.setUserBillingExempt(targetUser.uid, isExempt)
+            result.onSuccess {
+                onResult(true, null)
+            }.onFailure { err ->
+                onResult(false, err.message)
+            }
+        }
+    }
+
     private var observeUserJob: kotlinx.coroutines.Job? = null
 
     private fun startObservingCurrentUser(user: User) {
@@ -174,11 +305,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         observeUserJob = viewModelScope.launch {
             userRepository.observeUser(user.uid).collect { updatedUser ->
                 if (updatedUser == null) return@collect
+                _currentUser.value = updatedUser
                 val myDeviceId = getDeviceId()
 
                 if (!updatedUser.isActive) {
                     logout("Sua conta foi desativada pelo administrador.")
                     return@collect
+                }
+
+                // Se o usuário estiver no Player e expirar a assinatura:
+                if (!updatedUser.canAccessPremiumContent() && _currentScreen.value is UiScreen.Player) {
+                    onPlayerBack()
+                    openSubscriptionDialog()
+                }
+
+                // Se estava aguardando pagamento e a assinatura foi confirmada como ativa:
+                if (updatedUser.canAccessPremiumContent() && _subscriptionFlowState.value is SubscriptionFlowState.AwaitingPayment) {
+                    _subscriptionFlowState.value = SubscriptionFlowState.Success(
+                        "Assinatura renovada com sucesso! Seu acesso foi estendido por 30 dias."
+                    )
                 }
 
                 val remoteDeviceId = updatedUser.deviceId.ifBlank { updatedUser.sessionToken }
@@ -581,6 +726,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectChannelAndPlay(match: MatchItem, channel: ChannelOption) {
+        val user = _currentUser.value
+        if (user != null && !user.canAccessPremiumContent()) {
+            openSubscriptionDialog()
+            return
+        }
+
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoadingChannels = true)
             val result = repository.resolveStream(
@@ -660,6 +811,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playDirectVideo(video: PlayableVideo) {
+        val user = _currentUser.value
+        if (user != null && !user.canAccessPremiumContent()) {
+            openSubscriptionDialog()
+            return
+        }
+
         _uiState.value = _uiState.value.copy(
             currentVideo = video,
             selectedMatch = null

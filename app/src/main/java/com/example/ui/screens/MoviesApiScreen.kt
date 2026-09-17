@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +19,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -30,6 +34,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentPaste
@@ -38,11 +43,14 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -63,10 +71,13 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.window.DialogProperties
+import com.example.data.MovieMetadataResolver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,8 +95,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
+import com.example.data.models.EpisodeItem
+import com.example.data.models.MediaContentType
+import com.example.data.models.MediaItem
 import com.example.data.models.MovieApiSource
 import com.example.data.models.PlayableVideo
+import com.example.data.models.SeasonItem
+import com.example.data.models.isSeries
 import com.example.util.tvFocusable
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -108,10 +124,13 @@ fun MoviesApiScreen(
     onToggleApiSource: (id: String) -> Unit,
     onTestApiUrl: (url: String, type: String, onResult: (Boolean, String, Int) -> Unit) -> Unit,
     onSyncAllApis: () -> Unit,
-    onPlayVideo: (PlayableVideo) -> Unit
+    onPlayVideo: (PlayableVideo) -> Unit,
+    onAddToCatalog: (MediaItem) -> Unit = {}
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+
+    var mediaToAddToCatalog by remember { mutableStateOf<MediaItem?>(null) }
 
     var nameInput by remember { mutableStateOf("") }
     var urlInput by remember { mutableStateOf("") }
@@ -129,7 +148,19 @@ fun MoviesApiScreen(
 
     val categories = remember(apiVideos) {
         val list = mutableListOf("Todos")
-        val extracted = apiVideos.mapNotNull { it.category?.takeIf { c -> c.isNotBlank() } }.distinct().sorted()
+        val hasSeries = apiVideos.any { it.isSeries }
+        val hasMovies = apiVideos.any { !it.isSeries }
+        if (hasMovies) list.add("Filmes")
+        if (hasSeries) list.add("Séries")
+        val extracted = apiVideos.mapNotNull {
+            it.category?.takeIf { c ->
+                c.isNotBlank() &&
+                        !c.equals("Todos", ignoreCase = true) &&
+                        !c.equals("Filmes", ignoreCase = true) &&
+                        !c.equals("Séries", ignoreCase = true) &&
+                        !c.equals("Series", ignoreCase = true)
+            }
+        }.distinct().sorted()
         list.addAll(extracted)
         list
     }
@@ -138,11 +169,15 @@ fun MoviesApiScreen(
         apiVideos.filter { video ->
             val matchesQuery = searchQuery.isBlank() ||
                     video.title.contains(searchQuery, ignoreCase = true) ||
-                    (video.subtitle.contains(searchQuery, ignoreCase = true)) ||
+                    video.subtitle.contains(searchQuery, ignoreCase = true) ||
                     (video.category?.contains(searchQuery, ignoreCase = true) == true)
 
-            val matchesCategory = selectedCategory == "Todos" ||
-                    video.category.equals(selectedCategory, ignoreCase = true)
+            val matchesCategory = when (selectedCategory) {
+                "Todos" -> true
+                "Séries" -> video.isSeries || video.category.equals("Séries", ignoreCase = true) || video.category.equals("Series", ignoreCase = true)
+                "Filmes" -> !video.isSeries || video.category.equals("Filmes", ignoreCase = true)
+                else -> video.category.equals(selectedCategory, ignoreCase = true)
+            }
 
             matchesQuery && matchesCategory
         }
@@ -156,6 +191,7 @@ fun MoviesApiScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
+                .imePadding()
         ) {
             // Header Bar
             Row(
@@ -342,7 +378,59 @@ fun MoviesApiScreen(
                                 )
                             )
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Quick Presets
+                            Text(
+                                text = "Sugestões rápidas (EmbedplayApi):",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = NeonCyan
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                item {
+                                    AssistChip(
+                                        onClick = {
+                                            nameInput = "EmbedplayApi - Séries"
+                                            urlInput = "https://embedplayapi.top/api/all-ids?type=series"
+                                            selectedApiType = "JSON / REST"
+                                        },
+                                        label = { Text("📺 EmbedplayApi Séries", fontSize = 10.sp, color = Color.White) },
+                                        colors = AssistChipDefaults.assistChipColors(containerColor = Color(0xFF26324A)),
+                                        border = BorderStroke(1.dp, Color(0xFF7C4DFF).copy(alpha = 0.6f))
+                                    )
+                                }
+                                item {
+                                    AssistChip(
+                                        onClick = {
+                                            nameInput = "EmbedplayApi - Filmes"
+                                            urlInput = "https://embedplayapi.top/api/all-ids?type=movie"
+                                            selectedApiType = "JSON / REST"
+                                        },
+                                        label = { Text("🎬 EmbedplayApi Filmes", fontSize = 10.sp, color = Color.White) },
+                                        colors = AssistChipDefaults.assistChipColors(containerColor = Color(0xFF26324A)),
+                                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.6f))
+                                    )
+                                }
+                                item {
+                                    AssistChip(
+                                        onClick = {
+                                            nameInput = "EmbedplayApi - Catálogo"
+                                            urlInput = "https://embedplayapi.top/api/all-ids"
+                                            selectedApiType = "JSON / REST"
+                                        },
+                                        label = { Text("🌐 Todos os IDs", fontSize = 10.sp, color = Color.White) },
+                                        colors = AssistChipDefaults.assistChipColors(containerColor = Color(0xFF26324A)),
+                                        border = BorderStroke(1.dp, Color(0xFF37474F))
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
 
                             // API Format Selector
                             Text(
@@ -720,7 +808,13 @@ fun MoviesApiScreen(
                                 .heightIn(max = 1200.dp)
                         ) {
                             items(filteredVideos, key = { it.id }) { video ->
-                                MovieApiPosterItem(video = video, onPlay = { onPlayVideo(video) })
+                                MovieApiPosterItem(
+                                    video = video,
+                                    onPlay = { onPlayVideo(video) },
+                                    onAddToCatalog = { prefilledMedia ->
+                                        mediaToAddToCatalog = prefilledMedia
+                                    }
+                                )
                             }
                         }
                     }
@@ -737,9 +831,18 @@ fun MoviesApiScreen(
 
         AlertDialog(
             onDismissRequest = { editingSource = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .imePadding(),
             title = { Text("Editar API de Filmes", color = Color.White) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     OutlinedTextField(
                         value = editName,
                         onValueChange = { editName = it },
@@ -803,15 +906,121 @@ fun MoviesApiScreen(
             containerColor = Color(0xFF161D2F)
         )
     }
+
+    // Modal Add / Edit Media to Catalog Dialog
+    if (mediaToAddToCatalog != null) {
+        AddEditMediaDialog(
+            initialMedia = mediaToAddToCatalog,
+            onDismiss = { mediaToAddToCatalog = null },
+            onSave = { savedMedia ->
+                onAddToCatalog(savedMedia)
+                mediaToAddToCatalog = null
+                Toast.makeText(
+                    context,
+                    "\"${savedMedia.title}\" adicionado com sucesso a Filmes & Séries!",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        )
+    }
 }
 
 @Composable
 private fun MovieApiPosterItem(
     video: PlayableVideo,
-    onPlay: () -> Unit
+    onPlay: () -> Unit,
+    onAddToCatalog: (MediaItem) -> Unit
 ) {
-    val isSeries = video.category?.contains("série", ignoreCase = true) == true ||
-            video.subtitle.contains("série", ignoreCase = true)
+    val context = LocalContext.current
+    val resolver = remember { MovieMetadataResolver.getInstance(context) }
+
+    var resolvedTitle by remember(video.id) { mutableStateOf(video.title) }
+    var resolvedPoster by remember(video.id) { mutableStateOf(video.posterUrl) }
+    var resolvedYear by remember(video.id) { mutableStateOf<String?>(null) }
+
+    val rawId = remember(video.id, video.streamUrl, video.embedUrl, video.title) {
+        MovieMetadataResolver.extractImdbId(video.id)
+            ?: MovieMetadataResolver.extractImdbId(video.embedUrl)
+            ?: MovieMetadataResolver.extractImdbId(video.streamUrl)
+            ?: MovieMetadataResolver.extractImdbId(video.title)
+            ?: MovieMetadataResolver.extractTmdbId(video.id)
+            ?: MovieMetadataResolver.extractTmdbId(video.embedUrl)
+            ?: MovieMetadataResolver.extractTmdbId(video.streamUrl)
+    }
+
+    LaunchedEffect(video.id, rawId) {
+        if (!rawId.isNullOrBlank()) {
+            val cached = resolver.getCached(rawId)
+            if (cached != null && cached.title.isNotBlank()) {
+                resolvedTitle = cached.title
+                if (!cached.posterUrl.isNullOrBlank()) resolvedPoster = cached.posterUrl
+                resolvedYear = cached.year
+            } else if (MovieMetadataResolver.isPlaceholderTitle(resolvedTitle)) {
+                val res = resolver.resolve(rawId, video.isSeries)
+                if (res != null && res.title.isNotBlank()) {
+                    resolvedTitle = res.title
+                    if (!res.posterUrl.isNullOrBlank()) resolvedPoster = res.posterUrl
+                    resolvedYear = res.year
+                }
+            }
+        }
+    }
+
+    val isSeries = video.isSeries
+
+    val displayTitle = when {
+        resolvedTitle.isNotBlank() && !resolvedTitle.equals("null", ignoreCase = true) -> resolvedTitle
+        video.subtitle.isNotBlank() && !video.subtitle.equals("null", ignoreCase = true) -> video.subtitle
+        isSeries -> "Série sem título"
+        else -> "Filme sem título"
+    }
+
+    val displaySubtitle = resolvedYear?.let { if (isSeries) "Série ($it)" else "Filme ($it)" }
+        ?: video.subtitle.takeIf {
+            it.isNotBlank() && !it.equals("null", ignoreCase = true) && !it.equals(displayTitle, ignoreCase = true)
+        }
+
+    val posterModel = resolvedPoster.takeIf { !it.isNullOrBlank() }
+        ?: rawId?.let { MovieMetadataResolver.getDefaultPosterUrl(it).takeIf { url -> url.isNotBlank() } }
+
+    val prefilledMedia = remember(video, displayTitle, posterModel, resolvedYear, isSeries) {
+        val cleanTitle = if (displayTitle.startsWith("Filme sem título") || displayTitle.startsWith("Série sem título")) {
+            video.title.takeIf { !MovieMetadataResolver.isPlaceholderTitle(it) } ?: displayTitle
+        } else displayTitle
+
+        val defaultStream = video.streamUrl.ifBlank { video.embedUrl ?: "" }
+        val rawCleanId = video.id.replace(Regex("[^a-zA-Z0-9_]"), "_").ifBlank { System.currentTimeMillis().toString() }
+
+        MediaItem(
+            id = "api_$rawCleanId",
+            title = cleanTitle,
+            type = if (isSeries) MediaContentType.SERIES else MediaContentType.MOVIE,
+            coverUrl = posterModel ?: video.posterUrl ?: "",
+            backdropUrl = posterModel ?: video.posterUrl ?: "",
+            synopsis = if (isSeries) "Série importada via API EmbedPlay" else "Filme importado via API EmbedPlay",
+            category = video.category?.takeIf { !it.contains("API", ignoreCase = true) } ?: if (isSeries) "Séries" else "Filmes",
+            year = resolvedYear ?: "2024",
+            rating = "8.2",
+            movieStreamUrl = if (!isSeries) defaultStream else null,
+            isWebPlayer = video.forceWebPlayer,
+            seasons = if (isSeries) listOf(
+                SeasonItem(
+                    seasonNumber = 1,
+                    title = "1ª Temporada",
+                    episodes = listOf(
+                        EpisodeItem(
+                            id = "ep_${rawCleanId}_1_1",
+                            episodeNumber = 1,
+                            title = "Episódio 1",
+                            streamUrl = defaultStream,
+                            isWebPlayer = video.forceWebPlayer
+                        )
+                    )
+                )
+            ) else emptyList(),
+            isWorking = true
+        )
+    }
 
     Card(
         onClick = onPlay,
@@ -821,13 +1030,13 @@ private fun MovieApiPosterItem(
             .tvFocusable(RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2234)),
-        border = BorderStroke(1.dp, Color(0xFF2A3650))
+        border = BorderStroke(1.dp, if (isSeries) Color(0xFF7C4DFF).copy(alpha = 0.4f) else Color(0xFF2A3650))
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (!video.posterUrl.isNullOrBlank()) {
+            if (!posterModel.isNullOrBlank()) {
                 SubcomposeAsyncImage(
-                    model = video.posterUrl,
-                    contentDescription = video.title,
+                    model = posterModel,
+                    contentDescription = displayTitle,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                     loading = {
@@ -858,7 +1067,7 @@ private fun MovieApiPosterItem(
                             Icon(
                                 imageVector = Icons.Filled.Movie,
                                 contentDescription = null,
-                                tint = NeonCyan.copy(alpha = 0.5f),
+                                tint = if (isSeries) Color(0xFFB388FF).copy(alpha = 0.5f) else NeonCyan.copy(alpha = 0.5f),
                                 modifier = Modifier.size(36.dp)
                             )
                         }
@@ -878,7 +1087,7 @@ private fun MovieApiPosterItem(
                     Icon(
                         imageVector = Icons.Filled.Movie,
                         contentDescription = null,
-                        tint = NeonCyan.copy(alpha = 0.5f),
+                        tint = if (isSeries) Color(0xFFB388FF).copy(alpha = 0.5f) else NeonCyan.copy(alpha = 0.5f),
                         modifier = Modifier.size(36.dp)
                     )
                 }
@@ -903,6 +1112,28 @@ private fun MovieApiPosterItem(
                 )
             }
 
+            // Top-Right Quick Add to Catalog Button
+            Box(
+                modifier = Modifier
+                    .padding(6.dp)
+                    .align(Alignment.TopEnd)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .border(1.dp, NeonGreen, CircleShape)
+                    .clickable {
+                        onAddToCatalog(prefilledMedia)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "Adicionar a Filmes & Séries",
+                    tint = NeonGreen,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
             // Bottom Gradient Overlay & Title
             Box(
                 modifier = Modifier
@@ -917,7 +1148,7 @@ private fun MovieApiPosterItem(
             ) {
                 Column {
                     Text(
-                        text = video.title,
+                        text = displayTitle,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -925,10 +1156,10 @@ private fun MovieApiPosterItem(
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    if (video.subtitle.isNotBlank() && video.subtitle != video.title) {
+                    if (displaySubtitle != null) {
                         Spacer(modifier = Modifier.height(1.dp))
                         Text(
-                            text = video.subtitle,
+                            text = displaySubtitle,
                             fontSize = 9.sp,
                             color = Color(0xFFB0BEC5),
                             maxLines = 1,
@@ -946,24 +1177,53 @@ private fun MovieApiPosterItem(
                         Text(
                             text = video.category ?: if (isSeries) "Séries" else "Filmes",
                             fontSize = 9.sp,
-                            color = NeonCyan,
+                            color = if (isSeries) Color(0xFFB388FF) else NeonCyan,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
 
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .background(NeonGreen, CircleShape),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.PlayArrow,
-                                contentDescription = "Assistir",
-                                tint = Color.Black,
-                                modifier = Modifier.size(14.dp)
-                            )
+                            // Add button with edit dialog trigger
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF00E5FF).copy(alpha = 0.2f))
+                                    .border(1.dp, NeonCyan, CircleShape)
+                                    .clickable {
+                                        onAddToCatalog(prefilledMedia)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = "Adicionar ao Catálogo",
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+
+                            // Play button
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .background(NeonGreen, CircleShape)
+                                    .clickable {
+                                        onPlay()
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PlayArrow,
+                                    contentDescription = "Assistir",
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
                         }
                     }
                 }
