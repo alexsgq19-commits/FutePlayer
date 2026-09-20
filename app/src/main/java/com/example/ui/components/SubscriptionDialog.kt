@@ -41,6 +41,7 @@ fun SubscriptionDialog(
     user: User?,
     flowState: SubscriptionFlowState,
     onStartPayment: () -> Unit,
+    onAlreadyPaid: () -> Unit = {},
     onDismiss: () -> Unit,
     onCheckStatus: () -> Unit,
     onSimulateAdminApproval: ((String) -> Unit)? = null // Apenas se usuário for ADMIN testando
@@ -77,6 +78,8 @@ fun SubscriptionDialog(
             ) {
                 when (flowState) {
                     is SubscriptionFlowState.Idle -> {
+                        val isExempt = user?.isBillingExempt == true || user?.isBillingEnabled == false || user?.role == "ADMIN"
+
                         // Ícone de cabeçalho
                         Box(
                             modifier = Modifier
@@ -93,15 +96,15 @@ fun SubscriptionDialog(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.LockClock,
+                                imageVector = if (isExempt) Icons.Default.VerifiedUser else Icons.Default.LockClock,
                                 contentDescription = null,
-                                tint = StadiumAccentYellow,
+                                tint = if (isExempt) StadiumGreenPrimary else StadiumAccentYellow,
                                 modifier = Modifier.size(40.dp)
                             )
                         }
 
                         Text(
-                            text = "ASSINATURA VENCIDA",
+                            text = if (isExempt) "USUÁRIO ISENTO" else "ASSINATURA VENCIDA",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Black,
                             letterSpacing = 1.sp,
@@ -109,123 +112,161 @@ fun SubscriptionDialog(
                         )
 
                         Text(
-                            text = "Seu período de acesso terminou. Para continuar assistindo aos canais, jogos e filmes no FutePlayer, renove sua assinatura mensal.",
+                            text = if (isExempt) {
+                                "Sua conta está configurada como isenta de pagamento e possui acesso total a todos os canais, filmes e séries."
+                            } else {
+                                "Seu período de acesso terminou. Para continuar assistindo aos canais, jogos e filmes no FutePlayer, renove sua assinatura mensal."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        // Card de Valor e Benefícios
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.2f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                        if (isExempt) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = StadiumGreenPrimary.copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(
-                                    text = "Valor da Renovação:",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-
-                                Row(verticalAlignment = Alignment.Bottom) {
+                                Row(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = StadiumGreenPrimary)
                                     Text(
-                                        text = "R$ 10,00",
-                                        style = MaterialTheme.typography.headlineMedium,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = StadiumGreenPrimary
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "/ 30 dias",
+                                        text = "Acesso Total Liberado Sem Cobrança",
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(bottom = 4.dp)
-                                    )
-                                }
-
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(vertical = 4.dp),
-                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                                )
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = StadiumGreenPrimary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "PIX ou Cartão via InfinitePay",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = StadiumGreenPrimary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "Sem cobrança recorrente no cartão",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = StadiumGreenPrimary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "Liberação automática após confirmação",
-                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
                             }
-                        }
+                        } else {
+                            // Card de Valor e Benefícios
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                                shape = RoundedCornerShape(16.dp),
+                                border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.2f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "Valor da Renovação:",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
 
-                        // Botão Principal
-                        Button(
-                            onClick = onStartPayment,
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                        ) {
-                            Icon(Icons.Default.Payment, contentDescription = null, tint = Color.Black)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "RENOVAR POR R$ 10,00",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black,
-                                fontSize = 15.sp
-                            )
+                                    Row(verticalAlignment = Alignment.Bottom) {
+                                        Text(
+                                            text = "R$ 10,00",
+                                            style = MaterialTheme.typography.headlineMedium,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = StadiumGreenPrimary
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "/ 30 dias",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(bottom = 4.dp)
+                                        )
+                                    }
+
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                                    )
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = StadiumGreenPrimary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "PIX ou Cartão via InfinitePay",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = StadiumGreenPrimary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "Sem cobrança recorrente no cartão",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = StadiumGreenPrimary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "Liberação rápida pelo Administrador",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Botão Principal: Pagar Agora
+                            Button(
+                                onClick = onStartPayment,
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                            ) {
+                                Icon(Icons.Default.Payment, contentDescription = null, tint = Color.Black)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "PAGAR AGORA (R$ 10,00)",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Black,
+                                    fontSize = 15.sp
+                                )
+                            }
+
+                            // Botão Secundário: Já fiz o pagamento
+                            OutlinedButton(
+                                onClick = onAlreadyPaid,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.CheckCircleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("JÁ FIZ O PAGAMENTO (AVISAR ADMIN)", fontWeight = FontWeight.Bold)
+                            }
                         }
 
                         TextButton(
@@ -251,13 +292,13 @@ fun SubscriptionDialog(
                         }
 
                         Text(
-                            text = "Gerando pagamento...",
+                            text = "Abrindo pagamento...",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
 
                         Text(
-                            text = "Estamos preparando seu link seguro na InfinitePay. Aguarde alguns instantes...",
+                            text = "Redirecionando para o link seguro da InfinitePay...",
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -273,37 +314,38 @@ fun SubscriptionDialog(
                                 .background(StadiumAccentYellow.copy(alpha = 0.2f), shape = CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator(
-                                color = StadiumAccentYellow,
-                                strokeWidth = 3.dp,
+                            Icon(
+                                Icons.Default.HourglassTop,
+                                contentDescription = null,
+                                tint = StadiumAccentYellow,
                                 modifier = Modifier.size(36.dp)
                             )
                         }
 
                         Text(
-                            text = "Aguardando confirmação do Webhook...",
+                            text = "Pagamento em Análise",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center
                         )
 
                         Text(
-                            text = "O checkout da InfinitePay foi aberto. Conclua o pagamento via PIX ou Cartão.\n\nO acesso é liberado exclusivamente após o Webhook oficial da InfinitePay validar a transação e creditar +30 dias no Firebase.",
+                            text = "O link de pagamento foi aberto no navegador.\n\nApós efetuar o pagamento, seu acesso de 30 dias será confirmado pelo Administrador.",
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                        // Botão para avisar o admin
+                        Button(
+                            onClick = onAlreadyPaid,
                             shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("Código do Pedido:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(order.orderNsu, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                                Text("Valor: R$ 10,00", style = MaterialTheme.typography.labelSmall, color = StadiumGreenPrimary, fontWeight = FontWeight.Bold)
-                            }
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("JÁ FIZ O PAGAMENTO (AVISAR ADMIN)", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
 
                         // Botão para reabrir link se fechou
@@ -325,34 +367,21 @@ fun SubscriptionDialog(
                         }
 
                         // Botão para verificar status manualmente
-                        Button(
+                        OutlinedButton(
                             onClick = onCheckStatus,
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Verificar Status", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
-
-                        // Se usuário for Admin, opção para simular o recebimento do Webhook para homologação
-                        if (user?.role == "ADMIN" && onSimulateAdminApproval != null) {
-                            TextButton(
-                                onClick = { onSimulateAdminApproval(order.orderNsu) },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.AdminPanelSettings, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Simular Webhook InfinitePay (Admin Test)", fontSize = 12.sp)
-                            }
+                            Text("Verificar Status")
                         }
 
                         TextButton(
                             onClick = onDismiss,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Fechar e aguardar em segundo plano")
+                            Text("Fechar")
                         }
                     }
 

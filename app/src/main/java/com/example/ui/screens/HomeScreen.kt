@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import android.content.Context
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -89,10 +91,17 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.CheckCircleOutline
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.FactCheck
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -150,6 +159,8 @@ import com.example.data.models.MatchItem
 import com.example.data.models.MediaItem
 import com.example.data.models.PlayableVideo
 import com.example.data.models.SeasonItem
+import com.example.data.models.PaymentRequestItem
+import com.example.data.models.PaymentSetting
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -160,6 +171,7 @@ import com.example.ui.components.ChannelSelectorSheet
 import com.example.ui.components.ChromecastButton
 import com.example.ui.components.MatchCard
 import com.example.ui.theme.StadiumAccentRed
+import com.example.ui.theme.StadiumAccentYellow
 import com.example.ui.theme.StadiumCyanSecondary
 import com.example.ui.theme.StadiumGreenPrimary
 
@@ -191,10 +203,13 @@ fun HomeScreen(
     onSelectMedia: (MediaItem?) -> Unit = {},
     onDismissMedia: () -> Unit = {},
     onToggleChannelWorkingStatus: (String) -> Unit = {},
-    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _ -> },
-    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
+    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _ -> },
+    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
     onDeleteQuickChannel: (id: String) -> Unit = {},
     onResetDefaultChannel: (id: String) -> Unit = {},
+    onAddMediaGenre: (String) -> Unit = {},
+    onRenameMediaGenre: (String, String) -> Unit = { _, _ -> },
+    onDeleteMediaGenre: (String) -> Unit = {},
     onCreateCategory: (String) -> Unit = {},
     onDeleteCategory: (String) -> Unit = {},
     onEditCategory: (oldName: String, newName: String) -> Unit = { _, _ -> },
@@ -218,6 +233,11 @@ fun HomeScreen(
     onTestSingleChannel: (String) -> Unit = {},
     onDismissAdminChannelAlert: () -> Unit = {},
     onClearCorrectionLogs: () -> Unit = {},
+    paymentSetting: PaymentSetting = PaymentSetting(),
+    pendingPaymentRequests: List<PaymentRequestItem> = emptyList(),
+    onUpdatePaymentUrl: (String, (Boolean, String?) -> Unit) -> Unit = { _, _ -> },
+    onCreatePaymentRequest: ((Boolean, String) -> Unit) -> Unit = {},
+    onConfirmManualPayment: (PaymentRequestItem, (Boolean, String) -> Unit) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -729,6 +749,7 @@ fun HomeScreen(
                             mediaList = uiState.mediaCatalog,
                             searchQuery = uiState.searchQuery,
                             isAdmin = isAdmin,
+                            customMediaGenres = uiState.customMediaGenres,
                             selectedMediaItem = uiState.selectedMediaItem,
                             selectedSeason = uiState.selectedSeason,
                             selectedEpisode = uiState.selectedEpisode,
@@ -742,7 +763,10 @@ fun HomeScreen(
                             isTestingMovies = isTestingMovies,
                             movieTestProgressText = movieTestProgressText,
                             onTestAllMovies = onTestAllMovies,
-                            onOpenMoviesApi = onOpenMoviesApi
+                            onOpenMoviesApi = onOpenMoviesApi,
+                            onAddMediaGenre = onAddMediaGenre,
+                            onRenameMediaGenre = onRenameMediaGenre,
+                            onDeleteMediaGenre = onDeleteMediaGenre
                         )
                     }
 
@@ -763,7 +787,12 @@ fun HomeScreen(
                             onToggleRegistrationEnabled = onToggleRegistrationEnabled,
                             onPublishCustomNotification = onPublishCustomNotification,
                             onClearCorrectionLogs = onClearCorrectionLogs,
-                            networkStatus = uiState.networkStatus
+                            networkStatus = uiState.networkStatus,
+                            paymentSetting = paymentSetting,
+                            pendingPaymentRequests = pendingPaymentRequests,
+                            onUpdatePaymentUrl = onUpdatePaymentUrl,
+                            onCreatePaymentRequest = onCreatePaymentRequest,
+                            onConfirmManualPayment = onConfirmManualPayment
                         )
                     }
                 }
@@ -951,8 +980,8 @@ fun ChannelsGridContent(
     onTestAllChannels: () -> Unit = {},
     onTestSingleChannel: (String) -> Unit = {},
     onDismissAdminChannelAlert: () -> Unit = {},
-    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _ -> },
-    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean) -> Unit = { _, _, _, _, _, _, _ -> },
+    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _ -> },
+    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
     onDeleteQuickChannel: (id: String) -> Unit = {},
     onResetDefaultChannel: (id: String) -> Unit = {},
     onCreateCategory: (category: String) -> Unit = {},
@@ -1052,6 +1081,7 @@ fun ChannelsGridContent(
     var channelTitleInput by remember { mutableStateOf("") }
     var channelSubtitleInput by remember { mutableStateOf("") }
     var channelUrlInput by remember { mutableStateOf("") }
+    var channelLogoUrlInput by remember { mutableStateOf("") }
     var channelCategoryInput by remember { mutableStateOf("Esportes") }
     var customCategoryInput by remember { mutableStateOf("") }
     var isWebPlayerOption by remember { mutableStateOf(false) }
@@ -1064,6 +1094,7 @@ fun ChannelsGridContent(
     var editTitleInput by remember { mutableStateOf("") }
     var editSubtitleInput by remember { mutableStateOf("") }
     var editUrlInput by remember { mutableStateOf("") }
+    var editLogoUrlInput by remember { mutableStateOf("") }
     var editCategoryInput by remember { mutableStateOf("Esportes") }
     var editCustomCategoryInput by remember { mutableStateOf("") }
     var editIsWebPlayer by remember { mutableStateOf(false) }
@@ -1209,99 +1240,81 @@ fun ChannelsGridContent(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Canais Rápidos & TV Ao Vivo",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Filmes & Cinema, Católicos (CXTV), Esportes e Abertos • Player Nativo ou Web",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (isAdmin) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+        if (isAdmin) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            newCategoryInput = ""
+                            categoryFeedbackError = null
+                            showCreateCategoryDialog = true
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = StadiumGreenPrimary
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("btn_manage_categories")
                     ) {
-                        OutlinedButton(
-                            onClick = {
-                                newCategoryInput = ""
-                                categoryFeedbackError = null
-                                showCreateCategoryDialog = true
-                            },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = StadiumGreenPrimary
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.6f)),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                            modifier = Modifier.testTag("btn_manage_categories")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Category,
-                                contentDescription = "Categorias",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Categorias",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Category,
+                            contentDescription = "Categorias",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Categorias",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
 
-                        Button(
-                            onClick = {
-                                val defaultCat = when (selectedCategory) {
-                                    "Todos", "Personalizados", "Outros" -> "Esportes"
-                                    else -> selectedCategory
-                                }
-                                channelTitleInput = ""
-                                channelSubtitleInput = ""
-                                channelUrlInput = ""
-                                channelCategoryInput = defaultCat
-                                customCategoryInput = ""
-                                isWebPlayerOption = false
-                                channelIsWorkingInput = true
-                                errorMessage = null
-                                showAddDialog = true
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = StadiumGreenPrimary,
-                                contentColor = Color.Black
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.testTag("btn_open_add_channel")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "Adicionar Canal",
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Novo Canal",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
-                        }
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            val defaultCat = when (selectedCategory) {
+                                "Todos", "Personalizados", "Outros" -> "Esportes"
+                                else -> selectedCategory
+                            }
+                            channelTitleInput = ""
+                            channelSubtitleInput = ""
+                            channelUrlInput = ""
+                            channelLogoUrlInput = ""
+                            channelCategoryInput = defaultCat
+                            customCategoryInput = ""
+                            isWebPlayerOption = false
+                            channelIsWorkingInput = true
+                            errorMessage = null
+                            showAddDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = StadiumGreenPrimary,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("btn_open_add_channel")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Adicionar Canal",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Novo Canal",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
                     }
                 }
-            }
 
-            if (isAdmin) {
                 val totalCount = channels.size
                 val workingCount = channels.count { it.isWorking }
                 val offlineCount = totalCount - workingCount
@@ -1663,6 +1676,7 @@ fun ChannelsGridContent(
                                     channelTitleInput = ""
                                     channelSubtitleInput = ""
                                     channelUrlInput = ""
+                                    channelLogoUrlInput = ""
                                     channelCategoryInput = defaultCat
                                     customCategoryInput = ""
                                     isWebPlayerOption = false
@@ -1834,28 +1848,51 @@ fun ChannelsGridContent(
                                 modifier = Modifier.size(52.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(46.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Brush.linearGradient(
-                                                if (isCustom) listOf(StadiumGreenPrimary, Color(0xFF00E676))
-                                                else if (isCatholic) listOf(Color(0xFFFFD54F), Color(0xFFFF9800))
-                                                else if (isCinema) listOf(Color(0xFFBA68C8), Color(0xFF673AB7))
-                                                else if (isKids) listOf(Color(0xFFFF8A65), Color(0xFFFF5252))
-                                                else if (isRegional) listOf(Color(0xFF4FC3F7), Color(0xFF0288D1))
-                                                else listOf(StadiumGreenPrimary, StadiumCyanSecondary)
-                                            )
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (isCustom) Icons.Default.Link else if (isCatholic) Icons.Default.LiveTv else if (isCinema) Icons.Default.Movie else Icons.Default.Tv,
-                                        contentDescription = null,
-                                        tint = if (isCinema || isKids || isRegional) Color.White else Color.Black,
-                                        modifier = Modifier.size(24.dp)
-                                    )
+                                val channelLogo = channel.posterUrl?.trim()
+                                if (!channelLogo.isNullOrBlank()) {
+                                    Surface(
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .clip(RoundedCornerShape(12.dp)),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                    ) {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(LocalContext.current)
+                                                .data(channelLogo)
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = "Logomarca ${channel.title}",
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(4.dp)
+                                        )
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                Brush.linearGradient(
+                                                    if (isCustom) listOf(StadiumGreenPrimary, Color(0xFF00E676))
+                                                    else if (isCatholic) listOf(Color(0xFFFFD54F), Color(0xFFFF9800))
+                                                    else if (isCinema) listOf(Color(0xFFBA68C8), Color(0xFF673AB7))
+                                                    else if (isKids) listOf(Color(0xFFFF8A65), Color(0xFFFF5252))
+                                                    else if (isRegional) listOf(Color(0xFF4FC3F7), Color(0xFF0288D1))
+                                                    else listOf(StadiumGreenPrimary, StadiumCyanSecondary)
+                                                )
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isCustom) Icons.Default.Link else if (isCatholic) Icons.Default.LiveTv else if (isCinema) Icons.Default.Movie else Icons.Default.Tv,
+                                            contentDescription = null,
+                                            tint = if (isCinema || isKids || isRegional) Color.White else Color.Black,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                 }
 
                                 // Bolinha no canto indicando funcionamento do canal (Verde = funcionando, Vermelho = não funcionando) - Visível apenas para ADMIN
@@ -2012,6 +2049,7 @@ fun ChannelsGridContent(
                                         editTitleInput = channel.title
                                         editSubtitleInput = channel.subtitle
                                         editUrlInput = if (channel.streamUrl.isNotBlank()) channel.streamUrl else (channel.embedUrl ?: "")
+                                        editLogoUrlInput = channel.posterUrl ?: ""
                                         editIsWebPlayer = channel.forceWebPlayer
                                         editIsWorking = channel.isWorking
                                         val knownCategories = listOf("Esportes", "Católicos (CXTV)", "Desenhos & Kids", "Filmes & Séries", "Abertos & Regionais")
@@ -2391,6 +2429,41 @@ fun ChannelsGridContent(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    // Campo: Link da Logomarca (URL da Imagem)
+                    OutlinedTextField(
+                        value = channelLogoUrlInput,
+                        onValueChange = { channelLogoUrlInput = it },
+                        label = { Text("Link da Logomarca / Ícone (Opcional)") },
+                        placeholder = { Text("Ex: https://exemplo.com/logo.png") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    val clip = clipboardManager.getText()?.text
+                                    if (!clip.isNullOrBlank()) {
+                                        channelLogoUrlInput = clip.trim()
+                                    }
+                                },
+                                modifier = Modifier.testTag("btn_paste_logo_url")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Colar Link da Logomarca",
+                                    tint = StadiumGreenPrimary
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_channel_logo_url"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = StadiumGreenPrimary,
+                            focusedLabelColor = StadiumGreenPrimary
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     // Campo: Link do Canal com botão de Colar
                     OutlinedTextField(
                         value = channelUrlInput,
@@ -2520,7 +2593,8 @@ fun ChannelsGridContent(
                                     channelUrlInput.trim(),
                                     isWebPlayerOption,
                                     finalCategory,
-                                    channelIsWorkingInput
+                                    channelIsWorkingInput,
+                                    channelLogoUrlInput.trim().ifBlank { null }
                                 )
                                 showAddDialog = false
                             },
@@ -2810,6 +2884,41 @@ fun ChannelsGridContent(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    // Campo: Link da Logomarca (URL da Imagem)
+                    OutlinedTextField(
+                        value = editLogoUrlInput,
+                        onValueChange = { editLogoUrlInput = it },
+                        label = { Text("Link da Logomarca / Ícone (Opcional)") },
+                        placeholder = { Text("Ex: https://exemplo.com/logo.png") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    val clip = clipboardManager.getText()?.text
+                                    if (!clip.isNullOrBlank()) {
+                                        editLogoUrlInput = clip.trim()
+                                    }
+                                },
+                                modifier = Modifier.testTag("btn_paste_edit_logo_url")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Colar Link da Logomarca",
+                                    tint = StadiumCyanSecondary
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_edit_channel_logo_url"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = StadiumCyanSecondary,
+                            focusedLabelColor = StadiumCyanSecondary
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     // Campo: Link do Canal com botão de Colar
                     OutlinedTextField(
                         value = editUrlInput,
@@ -2970,7 +3079,8 @@ fun ChannelsGridContent(
                                     editUrlInput.trim(),
                                     editIsWebPlayer,
                                     finalEditCategory,
-                                    editIsWorking
+                                    editIsWorking,
+                                    editLogoUrlInput.trim()
                                 )
                                 showEditDialog = false
                             },
@@ -3461,7 +3571,12 @@ fun SupportContent(
     onToggleRegistrationEnabled: (Boolean) -> Unit = {},
     onPublishCustomNotification: (String, String) -> Unit = { _, _ -> },
     onClearCorrectionLogs: () -> Unit = {},
-    networkStatus: NetworkStatus
+    networkStatus: NetworkStatus,
+    paymentSetting: PaymentSetting = PaymentSetting(),
+    pendingPaymentRequests: List<PaymentRequestItem> = emptyList(),
+    onUpdatePaymentUrl: (String, (Boolean, String?) -> Unit) -> Unit = { _, _ -> },
+    onCreatePaymentRequest: ((Boolean, String) -> Unit) -> Unit = {},
+    onConfirmManualPayment: (PaymentRequestItem, (Boolean, String) -> Unit) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -3476,6 +3591,12 @@ fun SupportContent(
     val isAdmin = currentUser?.role == "ADMIN" || currentUser?.cpf == "06462555505"
     var versionNameInput by remember(uiState.latestVersionName) { mutableStateOf(uiState.latestVersionName) }
     var apkUrlInput by remember(uiState.latestApkUrl) { mutableStateOf(uiState.latestApkUrl) }
+
+    // Estado do Link de Pagamento no Painel Admin
+    var paymentUrlInput by remember(paymentSetting.paymentUrl) { mutableStateOf(paymentSetting.paymentUrl) }
+    var isSavingPaymentUrl by remember { mutableStateOf(false) }
+    var isSubmittingPaymentRequest by remember { mutableStateOf(false) }
+    var confirmingRequestId by remember { mutableStateOf<String?>(null) }
 
     var currentTimeString by remember { mutableStateOf("") }
     LaunchedEffect(isAdmin) {
@@ -3563,7 +3684,586 @@ fun SupportContent(
                     }
                 }
             }
+        }
 
+        // =========================================================================
+        // ÁREA DE PAGAMENTO / ASSINATURA (VISÍVEL PARA TODOS OS USUÁRIOS)
+        // =========================================================================
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("support_payment_area_card")
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    // Header do Card de Pagamento
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = StadiumGreenPrimary.copy(alpha = 0.15f),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Payments,
+                                        contentDescription = "Pagamento",
+                                        tint = StadiumGreenPrimary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column {
+                                Text(
+                                    text = "Renovação de Assinatura",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "R$ 10,00 • 30 dias de acesso completo",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = StadiumGreenPrimary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        val isExempt = currentUser?.isBillingExempt == true || currentUser?.isBillingEnabled == false
+                        val isUserExpired = currentUser?.isSubscriptionExpired() == true
+                        val badgeColor = if (isAdmin || isExempt) StadiumGreenPrimary
+                        else if (isUserExpired) Color(0xFFFF1744)
+                        else StadiumGreenPrimary
+
+                        val badgeText = if (isAdmin) "ADMIN"
+                        else if (isExempt) "ISENTO"
+                        else if (isUserExpired) "EXPIRADA"
+                        else "ATIVA"
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = badgeColor.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.5f)),
+                            modifier = Modifier.padding(start = 8.dp)
+                        ) {
+                            Text(
+                                text = badgeText,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Detalhes da Assinatura do Usuário
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Status Atual:",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = if (isAdmin) "Acesso Total (Administrador)"
+                                    else if (currentUser?.isBillingExempt == true) "Acesso Total (Isento)"
+                                    else if (currentUser?.isSubscriptionExpired() == true) "Vencida / Expirada"
+                                    else "Ativa até ${currentUser?.getFormattedExpirationDate() ?: "-"}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (currentUser?.isSubscriptionExpired() == true && !isAdmin && currentUser?.isBillingExempt != true) Color(0xFFFF1744) else StadiumGreenPrimary
+                                )
+                            }
+
+                            if (!isAdmin && currentUser?.isBillingExempt != true && currentUser != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Vencimento:",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = currentUser.getFormattedExpirationDate(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    val isExempt = currentUser?.isBillingExempt == true || currentUser?.isBillingEnabled == false
+                    if (isExempt) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = StadiumGreenPrimary.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = StadiumGreenPrimary,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Usuário Isento de Pagamento",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = StadiumGreenPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Sua conta possui isenção permanente e acesso total liberado a todos os canais, filmes e séries sem cobranças.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        lineHeight = 16.sp
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // Botão 1: PAGAR AGORA (Abre o link cadastrado no navegador)
+                        val effectivePaymentUrl = paymentSetting.paymentUrl.ifBlank {
+                            "https://checkout.infinitepay.io/pay/alexsandroguerraqueiroz"
+                        }
+
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(effectivePaymentUrl)).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    clipboardManager.setText(AnnotatedString(effectivePaymentUrl))
+                                    Toast.makeText(context, "Link copiado para a área de transferência!", Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("btn_pay_now_support"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = StadiumGreenPrimary,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OpenInNew,
+                                contentDescription = "Pagar Agora",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "PAGAR AGORA (R$ 10,00)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Botão 2: JÁ FIZ O PAGAMENTO (Cria solicitação de confirmação para o Admin)
+                        OutlinedButton(
+                            onClick = {
+                                if (!isSubmittingPaymentRequest) {
+                                    isSubmittingPaymentRequest = true
+                                    onCreatePaymentRequest { success, msg ->
+                                        isSubmittingPaymentRequest = false
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            enabled = !isSubmittingPaymentRequest,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("btn_already_paid_support"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = StadiumCyanSecondary
+                            ),
+                            border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.6f))
+                        ) {
+                            if (isSubmittingPaymentRequest) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = StadiumCyanSecondary,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Enviando solicitação...", fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircleOutline,
+                                    contentDescription = "Já fiz o pagamento",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("JÁ FIZ O PAGAMENTO (AVISAR ADMIN)", fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "Após realizar o pagamento pelo link acima, clique em 'JÁ FIZ O PAGAMENTO'. O administrador confirmará o recebimento e liberará seus 30 dias.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
+
+                    // =========================================================
+                    // PAINEL DE CONFIGURAÇÃO DE PAGAMENTO (APENAS ADMIN)
+                    // =========================================================
+                    if (isAdmin) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider(color = StadiumGreenPrimary.copy(alpha = 0.25f))
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.background.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.3f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.AdminPanelSettings,
+                                        contentDescription = null,
+                                        tint = StadiumGreenPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Configuração do Link de Pagamento (Admin)",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = StadiumGreenPrimary
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    text = "Cadastre ou altere o link de checkout da InfinitePay utilizado pelos usuários para pagamento.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 12.sp
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                OutlinedTextField(
+                                    value = paymentUrlInput,
+                                    onValueChange = { paymentUrlInput = it },
+                                    label = { Text("Link de Pagamento (InfinitePay URL)") },
+                                    placeholder = { Text("https://checkout.infinitepay.io/pay/alexsandroguerraqueiroz") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("input_admin_payment_url"),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = StadiumGreenPrimary,
+                                        focusedLabelColor = StadiumGreenPrimary,
+                                        cursorColor = StadiumGreenPrimary
+                                    )
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Button(
+                                    onClick = {
+                                        val trimmed = paymentUrlInput.trim()
+                                        if (trimmed.isNotBlank()) {
+                                            isSavingPaymentUrl = true
+                                            onUpdatePaymentUrl(trimmed) { success, err ->
+                                                isSavingPaymentUrl = false
+                                                if (success) {
+                                                    Toast.makeText(context, "Link de pagamento atualizado com sucesso!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, err ?: "Erro ao salvar link.", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                        } else {
+                                            Toast.makeText(context, "Informe o link de pagamento.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    enabled = !isSavingPaymentUrl,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("btn_save_payment_url"),
+                                    colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary, contentColor = Color.Black),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    if (isSavingPaymentUrl) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Salvando...", fontWeight = FontWeight.Bold)
+                                    } else {
+                                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Salvar Link de Pagamento", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // =========================================================================
+        // PAINEL ADMIN: PAGAMENTOS AGUARDANDO CONFIRMAÇÃO (VISÍVEL APENAS PARA ADMIN)
+        // =========================================================================
+        if (isAdmin) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_pending_payments_card")
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = StadiumCyanSecondary.copy(alpha = 0.15f),
+                                    modifier = Modifier.size(42.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.FactCheck,
+                                            contentDescription = "Aguardando Confirmação",
+                                            tint = StadiumCyanSecondary,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Pagamentos para Confirmar",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Solicitações manuais de usuários",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = StadiumCyanSecondary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (pendingPaymentRequests.isNotEmpty()) StadiumAccentYellow.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, if (pendingPaymentRequests.isNotEmpty()) StadiumAccentYellow else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
+                                modifier = Modifier.padding(start = 8.dp)
+                            ) {
+                                Text(
+                                    text = "${pendingPaymentRequests.size} pendente(s)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (pendingPaymentRequests.isNotEmpty()) StadiumAccentYellow else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        if (pendingPaymentRequests.isEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.background.copy(alpha = 0.4f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "Nenhum pagamento aguardando confirmação no momento.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                pendingPaymentRequests.forEach { req ->
+                                    val isThisConfirming = confirmingRequestId == req.id
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
+                                        border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.25f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(14.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = req.userName.ifBlank { "Usuário (UID: ${req.uid.take(8)})" },
+                                                        style = MaterialTheme.typography.titleSmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    if (req.userPhone.isNotBlank()) {
+                                                        Text(
+                                                            text = "Celular: ${req.userPhone}",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    if (req.userCpf.isNotBlank()) {
+                                                        Text(
+                                                            text = "CPF: ${req.userCpf}",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+
+                                                Column(horizontalAlignment = Alignment.End) {
+                                                    Text(
+                                                        text = req.getFormattedAmount(),
+                                                        style = MaterialTheme.typography.titleSmall,
+                                                        fontWeight = FontWeight.Black,
+                                                        color = StadiumGreenPrimary
+                                                    )
+                                                    Text(
+                                                        text = req.getFormattedCreatedAt(),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        fontSize = 10.sp
+                                                    )
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.height(10.dp))
+
+                                            Button(
+                                                onClick = {
+                                                    if (confirmingRequestId == null) {
+                                                        confirmingRequestId = req.id
+                                                        onConfirmManualPayment(req) { success, msg ->
+                                                            confirmingRequestId = null
+                                                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                                        }
+                                                    }
+                                                },
+                                                enabled = !isThisConfirming,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .testTag("btn_confirm_payment_${req.id}"),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = StadiumGreenPrimary,
+                                                    contentColor = Color.Black
+                                                ),
+                                                shape = RoundedCornerShape(10.dp)
+                                            ) {
+                                                if (isThisConfirming) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(16.dp),
+                                                        color = Color.Black,
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("Liberando +30 dias...", fontWeight = FontWeight.Bold)
+                                                } else {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("CONFIRMAR PAGAMENTO (+30 DIAS)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Status de Conexão com a Internet Card
@@ -3717,7 +4417,7 @@ fun SupportContent(
                                 OutlinedTextField(
                                     value = versionNameInput,
                                     onValueChange = { versionNameInput = it },
-                                    label = { Text("Número da Versão (ex: 1.1.0)") },
+                                    label = { Text("Número da Versão (ex: 1.2.0)") },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true
                                 )

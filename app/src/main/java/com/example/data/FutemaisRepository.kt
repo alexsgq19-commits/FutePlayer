@@ -1465,6 +1465,118 @@ class FutemaisRepository(context: Context) {
         return catalog
     }
 
+    // =========================================================================
+    // GÊNEROS DE FILMES & SÉRIES (GENRE MANAGEMENT)
+    // =========================================================================
+
+    fun getDefaultMediaGenres(): List<String> = listOf(
+        "Ação", "Aventura", "Comédia", "Drama", "Ficção Científica",
+        "Animação", "Terror", "Suspense", "Documentário", "Romance",
+        "Esportes", "Fantasia", "Policial", "Família", "Mistério",
+        "Guerra", "História", "Faroeste", "Música", "Nacional", "Anime"
+    )
+
+    fun getCustomMediaGenres(): List<String> {
+        val jsonStr = prefs.getString("custom_media_genres", null)
+        if (jsonStr.isNullOrBlank()) {
+            return getDefaultMediaGenres()
+        }
+        return try {
+            val arr = org.json.JSONArray(jsonStr)
+            val list = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                val g = arr.getString(i).trim()
+                if (g.isNotBlank() && !list.contains(g)) {
+                    list.add(g)
+                }
+            }
+            if (list.isEmpty()) getDefaultMediaGenres() else list
+        } catch (_: Exception) {
+            getDefaultMediaGenres()
+        }
+    }
+
+    private fun saveCustomMediaGenres(genres: List<String>) {
+        try {
+            val arr = org.json.JSONArray()
+            genres.forEach { g ->
+                if (g.isNotBlank()) arr.put(g.trim())
+            }
+            prefs.edit().putString("custom_media_genres", arr.toString()).apply()
+            syncMediaToFirestore()
+        } catch (_: Exception) {}
+    }
+
+    fun addCustomMediaGenre(genre: String): List<String> {
+        val clean = genre.trim()
+        if (clean.isBlank()) return getCustomMediaGenres()
+        val current = getCustomMediaGenres().toMutableList()
+        val exists = current.any { it.equals(clean, ignoreCase = true) }
+        if (!exists) {
+            current.add(clean)
+            saveCustomMediaGenres(current)
+        }
+        return getCustomMediaGenres()
+    }
+
+    fun renameCustomMediaGenre(oldGenre: String, newGenre: String): List<String> {
+        val cleanOld = oldGenre.trim()
+        val cleanNew = newGenre.trim()
+        if (cleanOld.isBlank() || cleanNew.isBlank() || cleanOld.equals(cleanNew, ignoreCase = true)) {
+            return getCustomMediaGenres()
+        }
+        val current = getCustomMediaGenres().toMutableList()
+        val index = current.indexOfFirst { it.equals(cleanOld, ignoreCase = true) }
+        if (index != -1) {
+            current[index] = cleanNew
+        } else {
+            current.add(cleanNew)
+        }
+        val updatedGenres = current.distinct()
+        saveCustomMediaGenres(updatedGenres)
+
+        // Atualiza os filmes/séries que possuem o gênero antigo
+        try {
+            val allMedia = getMediaCatalog()
+            val custom = loadCustomMediaCatalog().toMutableList()
+            var modified = false
+
+            allMedia.forEach { item ->
+                val categories = item.category.split(",", "/", "•", "|").map { it.trim() }.filter { it.isNotBlank() }
+                if (categories.any { it.equals(cleanOld, ignoreCase = true) }) {
+                    modified = true
+                    val newCategories = categories.map { if (it.equals(cleanOld, ignoreCase = true)) cleanNew else it }.distinct()
+                    val updatedItem = item.copy(category = newCategories.joinToString(", "))
+                    val idx = custom.indexOfFirst { it.id == item.id }
+                    if (idx >= 0) {
+                        custom[idx] = updatedItem
+                    } else {
+                        custom.add(updatedItem)
+                    }
+                }
+            }
+
+            if (modified) {
+                saveCustomMediaCatalog(custom)
+                syncMediaToFirestore()
+                _mediaCatalogFlow.value = getMediaCatalog()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao renomear gênero no catálogo de mídia", e)
+        }
+
+        return getCustomMediaGenres()
+    }
+
+    fun deleteCustomMediaGenre(genre: String): List<String> {
+        val clean = genre.trim()
+        val current = getCustomMediaGenres().toMutableList()
+        current.removeAll { it.equals(clean, ignoreCase = true) }
+        val finalGenres = if (current.isEmpty()) listOf("Ação", "Comédia", "Drama") else current
+        saveCustomMediaGenres(finalGenres)
+        return getCustomMediaGenres()
+    }
+
     private fun syncMediaFromFirestore(onComplete: () -> Unit = {}) {
         mediaListenerRegistration?.remove()
         mediaListenerRegistration = firestore?.collection("app_data")?.document("media_catalog")
@@ -1477,11 +1589,24 @@ class FutemaisRepository(context: Context) {
 
                 if (doc != null && doc.exists()) {
                     val remoteMediaJson = doc.getString("media_catalog_json")
+                    val remoteGenresJson = doc.getString("custom_media_genres")
                     val deletedIds = (doc.get("deleted_media_ids") as? List<*>)?.mapNotNull { it?.toString() }?.toSet() ?: emptySet()
 
                     val editor = prefs.edit()
                     if (deletedIds.isNotEmpty()) {
                         editor.putStringSet("deleted_media_ids", deletedIds)
+                    }
+
+                    if (!remoteGenresJson.isNullOrBlank()) {
+                        val localGenres = getCustomMediaGenres()
+                        val remoteGenres = try {
+                            val arr = org.json.JSONArray(remoteGenresJson)
+                            (0 until arr.length()).map { arr.getString(it) }
+                        } catch (_: Exception) { emptyList() }
+                        val merged = (localGenres + remoteGenres).distinct()
+                        val arr = org.json.JSONArray()
+                        merged.forEach { arr.put(it) }
+                        editor.putString("custom_media_genres", arr.toString())
                     }
 
                     if (!remoteMediaJson.isNullOrBlank()) {
@@ -1506,10 +1631,12 @@ class FutemaisRepository(context: Context) {
 
     private fun syncMediaToFirestore() {
         val customMedia = prefs.getString("custom_media_catalog", "[]") ?: "[]"
+        val customGenres = prefs.getString("custom_media_genres", "[]") ?: "[]"
         val deletedIds = prefs.getStringSet("deleted_media_ids", emptySet())?.toList() ?: emptyList()
 
         val data = hashMapOf(
             "media_catalog_json" to customMedia,
+            "custom_media_genres" to customGenres,
             "deleted_media_ids" to deletedIds,
             "last_updated" to System.currentTimeMillis()
         )

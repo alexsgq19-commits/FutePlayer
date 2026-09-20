@@ -6,6 +6,7 @@ import java.util.Date
 import java.util.Locale
 
 data class PaymentRecord(
+    @get:PropertyName("id") @set:PropertyName("id") var id: String = "",
     @get:PropertyName("uid") @set:PropertyName("uid") var uid: String = "",
     @get:PropertyName("userName") @set:PropertyName("userName") var userName: String = "",
     @get:PropertyName("orderNsu") @set:PropertyName("orderNsu") var orderNsu: String = "",
@@ -19,6 +20,8 @@ data class PaymentRecord(
     @get:PropertyName("createdAt") @set:PropertyName("createdAt") var createdAt: Long = System.currentTimeMillis(),
     @get:PropertyName("status") @set:PropertyName("status") var status: String = "PAID"
 ) {
+    fun getDocId(): String = id.ifBlank { transactionNsu.ifBlank { orderNsu } }
+
     fun getFormattedPaidAt(): String {
         val target = if (paidAt > 0L) paidAt else createdAt
         if (target <= 0L) return "-"
@@ -29,5 +32,14 @@ data class PaymentRecord(
     fun getFormattedAmount(): String {
         val reais = (if (paidAmount > 0L) paidAmount else amount) / 100.0
         return String.format(Locale("pt", "BR"), "R$ %.2f", reais)
+    }
+
+    fun getFormattedCaptureMethod(): String {
+        val method = captureMethod.trim().uppercase()
+        return when {
+            method.isEmpty() || method == "PIX" || method == "MANUAL_ADMIN" || method == "MANUAL" -> "PIX"
+            method == "CREDIT_CARD" || method == "CARD" -> "CARTÃO"
+            else -> method
+        }
     }
 }

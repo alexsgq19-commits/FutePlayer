@@ -34,6 +34,7 @@ import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.UserManagementScreen
 import com.example.ui.components.SubscriptionDialog
 import com.example.ui.components.PaymentHistoryDialog
+import com.example.ui.components.AdminPendingPaymentsDialog
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : AppCompatActivity() {
@@ -109,6 +110,8 @@ class MainActivity : AppCompatActivity() {
                         val subscriptionFlowState by viewModel.subscriptionFlowState.collectAsState()
                         val showPaymentHistoryDialog by viewModel.showPaymentHistoryDialog.collectAsState()
                         val allPayments by viewModel.allPayments.collectAsState()
+                        val paymentSetting by viewModel.paymentSetting.collectAsState()
+                        val pendingPaymentRequests by viewModel.pendingPaymentRequests.collectAsState()
 
                         when (currentScreen) {
                             is UiScreen.Home -> {
@@ -162,11 +165,11 @@ class MainActivity : AppCompatActivity() {
                                         viewModel.clearSelectedMedia()
                                     },
                                     onToggleChannelWorkingStatus = { viewModel.toggleChannelWorkingStatus(it) },
-                                    onAddQuickChannel = { title, subtitle, url, isWebPlayer, category, isWorking ->
-                                        viewModel.addQuickChannel(title, subtitle, url, isWebPlayer, category, isWorking)
+                                    onAddQuickChannel = { title, subtitle, url, isWebPlayer, category, isWorking, logoUrl ->
+                                        viewModel.addQuickChannel(title, subtitle, url, isWebPlayer, category, isWorking, logoUrl)
                                     },
-                                    onEditQuickChannel = { id, title, subtitle, url, isWebPlayer, category, isWorking ->
-                                        viewModel.updateQuickChannel(id, title, subtitle, url, isWebPlayer, category, isWorking)
+                                    onEditQuickChannel = { id, title, subtitle, url, isWebPlayer, category, isWorking, logoUrl ->
+                                        viewModel.updateQuickChannel(id, title, subtitle, url, isWebPlayer, category, isWorking, logoUrl)
                                     },
                                     onDeleteQuickChannel = { id ->
                                         viewModel.deleteQuickChannel(id)
@@ -182,6 +185,15 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onEditCategory = { oldName, newName ->
                                         viewModel.updateChannelCategory(oldName, newName)
+                                    },
+                                    onAddMediaGenre = { genre ->
+                                        viewModel.addMediaGenre(genre)
+                                    },
+                                    onRenameMediaGenre = { oldGenre, newGenre ->
+                                        viewModel.renameMediaGenre(oldGenre, newGenre)
+                                    },
+                                    onDeleteMediaGenre = { genre ->
+                                        viewModel.deleteMediaGenre(genre)
                                     },
                                     onPublishUpdate = { url, version ->
                                         viewModel.publishNewUpdate(url, version)
@@ -231,6 +243,17 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onClearCorrectionLogs = {
                                         viewModel.clearCorrectionLogs()
+                                    },
+                                    paymentSetting = paymentSetting,
+                                    pendingPaymentRequests = pendingPaymentRequests,
+                                    onUpdatePaymentUrl = { url, cb ->
+                                        viewModel.updatePaymentUrl(url, cb)
+                                    },
+                                    onCreatePaymentRequest = { cb ->
+                                        viewModel.createManualPaymentRequest(cb)
+                                    },
+                                    onConfirmManualPayment = { req, cb ->
+                                        viewModel.confirmManualPayment(req, cb)
                                     }
                                 )
                             }
@@ -371,6 +394,11 @@ class MainActivity : AppCompatActivity() {
                                 user = currentUser,
                                 flowState = subscriptionFlowState,
                                 onStartPayment = { viewModel.startSubscriptionPayment(this@MainActivity) },
+                                onAlreadyPaid = {
+                                    viewModel.createManualPaymentRequest { success, msg ->
+                                        android.widget.Toast.makeText(this@MainActivity, msg, android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                },
                                 onDismiss = { viewModel.dismissSubscriptionDialog() },
                                 onCheckStatus = { viewModel.checkSubscriptionStatusManually() },
                                 onSimulateAdminApproval = if (currentUser?.role == "ADMIN") {
@@ -382,7 +410,37 @@ class MainActivity : AppCompatActivity() {
                         if (showPaymentHistoryDialog) {
                             PaymentHistoryDialog(
                                 payments = allPayments,
+                                isAdmin = currentUser?.role == "ADMIN",
+                                onUpdatePayment = { paymentId, userName, amountCents, method, status, receiptUrl, onComplete ->
+                                    viewModel.updatePaymentRecord(paymentId, userName, amountCents, method, status, receiptUrl, onComplete)
+                                },
+                                onChangePaymentStatus = { paymentId, newStatus, onComplete ->
+                                    viewModel.changePaymentStatus(paymentId, newStatus, onComplete)
+                                },
+                                onDeletePayment = { paymentId, onComplete ->
+                                    viewModel.deletePaymentRecord(paymentId, onComplete)
+                                },
                                 onDismiss = { viewModel.dismissPaymentHistoryDialog() }
+                            )
+                        }
+
+                        val isAdmin = currentUser?.role == "ADMIN"
+                        var dismissedAdminRequestIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+                        LaunchedEffect(pendingPaymentRequests) {
+                            if (pendingPaymentRequests.isEmpty()) {
+                                dismissedAdminRequestIds = emptySet()
+                            }
+                        }
+                        val unviewedPendingRequests = pendingPaymentRequests.filter { it.id !in dismissedAdminRequestIds }
+                        if (isAdmin && unviewedPendingRequests.isNotEmpty()) {
+                            AdminPendingPaymentsDialog(
+                                pendingPaymentRequests = pendingPaymentRequests,
+                                onConfirmManualPayment = { req, cb ->
+                                    viewModel.confirmManualPayment(req, cb)
+                                },
+                                onDismiss = {
+                                    dismissedAdminRequestIds = dismissedAdminRequestIds + pendingPaymentRequests.map { it.id }
+                                }
                             )
                         }
                     }

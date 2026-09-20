@@ -147,6 +147,7 @@ fun MediaScreenContent(
     mediaList: List<MediaItem>,
     searchQuery: String,
     isAdmin: Boolean,
+    customMediaGenres: List<String> = emptyList(),
     selectedMediaItem: MediaItem? = null,
     selectedSeason: SeasonItem? = null,
     selectedEpisode: EpisodeItem? = null,
@@ -161,6 +162,9 @@ fun MediaScreenContent(
     movieTestProgressText: String? = null,
     onTestAllMovies: () -> Unit = {},
     onOpenMoviesApi: () -> Unit = {},
+    onAddMediaGenre: (String) -> Unit = {},
+    onRenameMediaGenre: (String, String) -> Unit = { _, _ -> },
+    onDeleteMediaGenre: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -168,17 +172,19 @@ fun MediaScreenContent(
     var selectedCategoryFilter by remember { mutableStateOf("Todos") }
     var mediaToEdit by remember { mutableStateOf<MediaItem?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var showManageGenresDialog by remember { mutableStateOf(false) }
     var mediaToDelete by remember { mutableStateOf<MediaItem?>(null) }
     var selectedMediaForDetail by remember { mutableStateOf<MediaItem?>(null) }
 
     val activeMedia = selectedMediaItem ?: selectedMediaForDetail
 
     // Categories extraction
-    val allCategories = remember(mediaList) {
+    val allCategories = remember(mediaList, customMediaGenres) {
         val cats = mediaList.flatMap { item ->
             item.category.split(",", "/", "•", "|").map { it.trim() }.filter { it.isNotBlank() }
-        }.distinct().sorted()
-        listOf("Todos") + cats
+        }
+        val combined = (customMediaGenres + cats).distinct().filter { it.isNotBlank() }.sorted()
+        listOf("Todos") + combined
     }
 
     // Filter list
@@ -336,11 +342,11 @@ fun MediaScreenContent(
             }
         }
 
-        // Admin Header / Count Banner
+        // Linha 1: Contador de Títulos e Badge Fora do Ar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -354,7 +360,7 @@ fun MediaScreenContent(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "${filteredMedia.size} ${if (filteredMedia.size == 1) "título encontrado" else "títulos disponíveis"}",
-                    color = Color.White.copy(alpha = 0.7f),
+                    color = Color.White.copy(alpha = 0.75f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -362,46 +368,97 @@ fun MediaScreenContent(
 
             if (isAdmin) {
                 val offlineCount = remember(mediaList) { mediaList.count { !it.isWorking } }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (offlineCount > 0) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFFFF1744).copy(alpha = 0.2f),
-                            border = BorderStroke(1.dp, Color(0xFFFF1744).copy(alpha = 0.6f)),
-                            modifier = Modifier.clickable {
-                                selectedTypeFilter = "🔴 Fora do Ar"
-                            }
+                if (offlineCount > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFFF1744).copy(alpha = 0.2f),
+                        border = BorderStroke(1.dp, Color(0xFFFF1744).copy(alpha = 0.6f)),
+                        modifier = Modifier.clickable {
+                            selectedTypeFilter = "🔴 Fora do Ar"
+                        }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFFF1744))
-                                )
-                                Text(
-                                    text = "$offlineCount fora",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFFF5252)
-                                )
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFF1744))
+                            )
+                            Text(
+                                text = "$offlineCount fora",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFF5252)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Barra de Ações do Administrador (Gêneros, API Filmes, Testar, Adicionar)
+        if (isAdmin) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // Linha 1: Gêneros + API Filmes
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Botão Gerenciar Gêneros
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFFFB300).copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, Color(0xFFFFB300).copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .clickable {
+                                showManageGenresDialog = true
                             }
+                            .testTag("btn_manage_genres")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Category,
+                                contentDescription = "Gêneros",
+                                tint = Color(0xFFFFB300),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Gêneros",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFFB300),
+                                maxLines = 1
+                            )
                         }
                     }
 
-                    // Botão API de Filmes
+                    // Botão API Filmes
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = NeonGreen.copy(alpha = 0.18f),
-                        border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.5f)),
+                        color = NeonGreen.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.6f)),
                         modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
                             .clickable {
                                 onOpenMoviesApi()
                             }
@@ -409,30 +466,43 @@ fun MediaScreenContent(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 6.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Link,
                                 contentDescription = "API de Filmes",
                                 tint = NeonGreen,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(16.dp)
                             )
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
                                 text = "API Filmes",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = NeonGreen
+                                color = NeonGreen,
+                                maxLines = 1
                             )
                         }
                     }
+                }
 
+                // Linha 2: Testar + Adicionar
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     // Botão Testar Filmes & Séries
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = NeonCyan.copy(alpha = 0.18f),
-                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.5f)),
+                        color = NeonCyan.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.6f)),
                         modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
                             .clickable(enabled = !isTestingMovies) {
                                 onTestAllMovies()
                             }
@@ -440,24 +510,37 @@ fun MediaScreenContent(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 6.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Movie,
-                                contentDescription = "Testar filmes e séries",
-                                tint = NeonCyan,
-                                modifier = Modifier.size(14.dp)
-                            )
+                            if (isTestingMovies) {
+                                CircularProgressIndicator(
+                                    color = NeonCyan,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.Movie,
+                                    contentDescription = "Testar filmes e séries",
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
                                 text = if (isTestingMovies) "Testando..." else "Testar",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = NeonCyan
+                                color = NeonCyan,
+                                maxLines = 1
                             )
                         }
                     }
 
+                    // Botão Adicionar Filme / Série
                     Button(
                         onClick = {
                             mediaToEdit = null
@@ -468,7 +551,10 @@ fun MediaScreenContent(
                             contentColor = Color.Black
                         ),
                         shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Add,
@@ -480,7 +566,9 @@ fun MediaScreenContent(
                         Text(
                             text = "Adicionar",
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Black,
+                            maxLines = 1
                         )
                     }
                 }
@@ -653,6 +741,8 @@ fun MediaScreenContent(
     if (showAddDialog) {
         AddEditMediaDialog(
             initialMedia = mediaToEdit,
+            availableGenres = allCategories.filter { it != "Todos" },
+            onAddGenre = { newGenre -> onAddMediaGenre(newGenre) },
             onDismiss = {
                 showAddDialog = false
                 mediaToEdit = null
@@ -667,6 +757,18 @@ fun MediaScreenContent(
                     Toast.LENGTH_SHORT
                 ).show()
             }
+        )
+    }
+
+    // Manage Genres Dialog
+    if (showManageGenresDialog) {
+        ManageGenresDialog(
+            genres = allCategories.filter { it != "Todos" },
+            mediaList = mediaList,
+            onAddGenre = { g -> onAddMediaGenre(g) },
+            onRenameGenre = { oldG, newG -> onRenameMediaGenre(oldG, newG) },
+            onDeleteGenre = { g -> onDeleteMediaGenre(g) },
+            onDismiss = { showManageGenresDialog = false }
         )
     }
 
@@ -1810,6 +1912,8 @@ fun EpisodeCard(
 @Composable
 fun AddEditMediaDialog(
     initialMedia: MediaItem?,
+    availableGenres: List<String> = emptyList(),
+    onAddGenre: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (MediaItem) -> Unit
 ) {
@@ -1855,12 +1959,19 @@ fun AddEditMediaDialog(
 
     var selectedSeasonTab by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showInlineAddGenre by remember { mutableStateOf(false) }
+    var inlineGenreInput by remember { mutableStateOf("") }
 
-    val categorySuggestions = listOf(
+    val defaultFallbackGenres = listOf(
         "Ação", "Aventura", "Comédia", "Drama", "Ficção Científica",
         "Animação", "Terror", "Suspense", "Documentário", "Romance",
-        "Esportes", "Fantasia", "Policial", "Família", "Mistério"
+        "Esportes", "Fantasia", "Policial", "Família", "Mistério",
+        "Guerra", "História", "Faroeste", "Música", "Nacional", "Anime"
     )
+
+    val categorySuggestions = remember(availableGenres) {
+        (availableGenres + defaultFallbackGenres).distinct().filter { it.isNotBlank() }.sorted()
+    }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -2127,8 +2238,99 @@ fun AddEditMediaDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // Botão/Campo para adicionar novo gênero rapidamente
+                            if (showInlineAddGenre) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SurfaceDark)
+                                        .border(1.dp, NeonGreen, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = inlineGenreInput,
+                                        onValueChange = { inlineGenreInput = it },
+                                        placeholder = { Text("Novo gênero", fontSize = 11.sp) },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .width(110.dp)
+                                            .height(40.dp),
+                                        colors = customTextFieldColors()
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            val clean = inlineGenreInput.trim()
+                                            if (clean.isNotBlank()) {
+                                                onAddGenre(clean)
+                                                val currentGenres = category
+                                                    .split(",", "/", "•", "|")
+                                                    .map { it.trim() }
+                                                    .filter { it.isNotBlank() }
+                                                if (!currentGenres.any { it.equals(clean, ignoreCase = true) }) {
+                                                    category = (currentGenres + clean).joinToString(", ")
+                                                }
+                                                inlineGenreInput = ""
+                                                showInlineAddGenre = false
+                                            }
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Check,
+                                            contentDescription = "Confirmar",
+                                            tint = NeonGreen,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            showInlineAddGenre = false
+                                            inlineGenreInput = ""
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Cancelar",
+                                            tint = Color.White.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(NeonGreen.copy(alpha = 0.15f))
+                                        .border(1.dp, NeonGreen.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                                        .clickable { showInlineAddGenre = true }
+                                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Add,
+                                            contentDescription = "Criar novo gênero",
+                                            tint = NeonGreen,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Text(
+                                            text = "Novo Gênero",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = NeonGreen
+                                        )
+                                    }
+                                }
+                            }
+
                             val currentGenres = category
                                 .split(",", "/", "•", "|")
                                 .map { it.trim() }
@@ -2697,6 +2899,483 @@ fun AddEditMediaDialog(
                 }
             }
         }
+    }
+}
+
+// =============================================================================
+// MANAGE GENRES DIALOG (GERENCIAR GÊNEROS DE FILMES & SÉRIES)
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ManageGenresDialog(
+    genres: List<String>,
+    mediaList: List<MediaItem>,
+    onAddGenre: (String) -> Unit,
+    onRenameGenre: (String, String) -> Unit,
+    onDeleteGenre: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var newGenreText by remember { mutableStateOf("") }
+    var genreSearchQuery by remember { mutableStateOf("") }
+    var genreToEdit by remember { mutableStateOf<String?>(null) }
+    var renameInputText by remember { mutableStateOf("") }
+    var genreToDelete by remember { mutableStateOf<String?>(null) }
+
+    val filteredGenres = remember(genres, genreSearchQuery) {
+        if (genreSearchQuery.isBlank()) {
+            genres.sorted()
+        } else {
+            genres.filter { it.contains(genreSearchQuery, ignoreCase = true) }.sorted()
+        }
+    }
+
+    // Helper to count how many media items belong to a genre
+    fun getMediaCountForGenre(genreName: String): Int {
+        return mediaList.count { item ->
+            item.category.split(",", "/", "•", "|")
+                .map { it.trim() }
+                .any { it.equals(genreName, ignoreCase = true) }
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .fillMaxHeight(0.85f)
+                .clip(RoundedCornerShape(20.dp)),
+            color = DarkBg,
+            border = BorderStroke(1.dp, Color(0xFFFFB300).copy(alpha = 0.5f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFFB300).copy(alpha = 0.15f))
+                                .border(1.dp, Color(0xFFFFB300), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Category,
+                                contentDescription = null,
+                                tint = Color(0xFFFFB300),
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Gêneros do Catálogo",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Adicione, edite ou renomeie gêneros",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(SurfaceDark)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Fechar",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Card para Adicionar Novo Gênero
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = SurfaceDark,
+                    border = BorderStroke(1.dp, NeonGreen.copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Adicionar Novo Gênero",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = NeonGreen,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = newGenreText,
+                                onValueChange = { newGenreText = it },
+                                placeholder = { Text("Ex: Anime, K-Drama, Guerra", fontSize = 13.sp) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                colors = customTextFieldColors()
+                            )
+                            Button(
+                                onClick = {
+                                    val clean = newGenreText.trim()
+                                    if (clean.isNotBlank()) {
+                                        onAddGenre(clean)
+                                        newGenreText = ""
+                                    }
+                                },
+                                enabled = newGenreText.isNotBlank(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = NeonGreen,
+                                    contentColor = Color.Black
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.height(52.dp)
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Adicionar", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Busca / Filtro de Gêneros
+                if (genres.size > 4) {
+                    OutlinedTextField(
+                        value = genreSearchQuery,
+                        onValueChange = { genreSearchQuery = it },
+                        placeholder = { Text("Filtrar gêneros cadastrados...", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.FilterList,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.5f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        trailingIcon = {
+                            if (genreSearchQuery.isNotBlank()) {
+                                IconButton(onClick = { genreSearchQuery = "" }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Close,
+                                        contentDescription = "Limpar",
+                                        tint = Color.White.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = customTextFieldColors()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
+                // Lista de Gêneros
+                Text(
+                    text = "Gêneros Cadastrados (${filteredGenres.size})",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                if (filteredGenres.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (genreSearchQuery.isNotBlank()) "Nenhum gênero encontrado na busca." else "Nenhum gênero cadastrado.",
+                            color = Color.White.copy(alpha = 0.5f),
+                            fontSize = 13.sp
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredGenres, key = { it }) { genreName ->
+                            val count = getMediaCountForGenre(genreName)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SurfaceDark,
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(NeonCyan.copy(alpha = 0.15f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = genreName.take(1).uppercase(),
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = NeonCyan
+                                            )
+                                        }
+
+                                        Column {
+                                            Text(
+                                                text = genreName,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                            Text(
+                                                text = "$count ${if (count == 1) "título" else "títulos"}",
+                                                fontSize = 11.sp,
+                                                color = if (count > 0) NeonGreen else Color.White.copy(alpha = 0.45f)
+                                            )
+                                        }
+                                    }
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // Botão Editar / Renomear
+                                        IconButton(
+                                            onClick = {
+                                                genreToEdit = genreName
+                                                renameInputText = genreName
+                                            },
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(NeonCyan.copy(alpha = 0.12f))
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Edit,
+                                                contentDescription = "Renomear Gênero",
+                                                tint = NeonCyan,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        // Botão Excluir
+                                        IconButton(
+                                            onClick = {
+                                                genreToDelete = genreName
+                                            },
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color(0xFFFF5252).copy(alpha = 0.12f))
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Delete,
+                                                contentDescription = "Excluir Gênero",
+                                                tint = Color(0xFFFF5252),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Botão Concluir
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SurfaceDark,
+                        contentColor = Color.White
+                    ),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                ) {
+                    Text("Concluir", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+
+    // Sub-diálogo para Renomear Gênero
+    genreToEdit?.let { oldGenre ->
+        AlertDialog(
+            onDismissRequest = { genreToEdit = null },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = null,
+                        tint = NeonCyan
+                    )
+                    Text("Editar Gênero", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Novo nome para o gênero \"$oldGenre\":",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 13.sp
+                    )
+                    OutlinedTextField(
+                        value = renameInputText,
+                        onValueChange = { renameInputText = it },
+                        placeholder = { Text("Nome do Gênero") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = customTextFieldColors()
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = NeonCyan.copy(alpha = 0.1f),
+                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "💡 Todos os filmes e séries associados a \"$oldGenre\" serão atualizados automaticamente.",
+                            color = NeonCyan,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val cleanNew = renameInputText.trim()
+                        if (cleanNew.isNotBlank()) {
+                            onRenameGenre(oldGenre, cleanNew)
+                            genreToEdit = null
+                        }
+                    },
+                    enabled = renameInputText.isNotBlank() && !renameInputText.trim().equals(oldGenre, ignoreCase = true),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = NeonCyan,
+                        contentColor = Color.Black
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Salvar", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { genreToEdit = null }) {
+                    Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
+                }
+            },
+            containerColor = SurfaceDark
+        )
+    }
+
+    // Sub-diálogo de Confirmação para Excluir Gênero
+    genreToDelete?.let { genre ->
+        AlertDialog(
+            onDismissRequest = { genreToDelete = null },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = Color(0xFFFF5252)
+                    )
+                    Text("Excluir Gênero?", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Deseja remover o gênero \"$genre\" da lista de opções?",
+                        color = Color.White,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = "Nota: Nenhum filme ou série será apagado.",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteGenre(genre)
+                        genreToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF5252),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Excluir", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { genreToDelete = null }) {
+                    Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
+                }
+            },
+            containerColor = SurfaceDark
+        )
     }
 }
 

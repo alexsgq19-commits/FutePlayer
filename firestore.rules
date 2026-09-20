@@ -28,10 +28,23 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Coleção de Pagamentos: Criada exclusivamente pelo backend
+    // Coleção de Pagamentos: Criada exclusivamente pelo backend ou Admin
     match /payments/{paymentId} {
       allow read: if request.auth != null;
       allow write: if request.auth.token.role == 'ADMIN';
+    }
+
+    // Configurações Globais do App (incluindo link de pagamento em settings/payment)
+    match /settings/{document=**} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.token.role == 'ADMIN';
+    }
+
+    // Solicitações Manuais de Pagamento (Criadas pelos usuários, confirmadas pelo Admin)
+    match /payment_requests/{requestId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.status == 'PENDING';
+      allow update, delete: if request.auth != null && request.auth.token.role == 'ADMIN';
     }
   }
 }

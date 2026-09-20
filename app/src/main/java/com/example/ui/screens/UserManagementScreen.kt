@@ -97,9 +97,8 @@ fun UserManagementScreen(
 
             matchesSearch && matchesFilter
         }.sortedWith(
-            compareByDescending<User> { it.isCurrentlyOnline(currentTime) }
-                .thenByDescending { it.lastSeen }
-                .thenBy { it.name }
+            compareBy<User> { if (it.createdAt > 0L) it.createdAt else 0L }
+                .thenBy { it.uid }
         )
     }
 

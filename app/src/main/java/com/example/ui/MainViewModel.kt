@@ -28,6 +28,8 @@ import com.example.data.models.SeasonItem
 import com.example.data.SubscriptionRepository
 import com.example.data.models.PaymentOrder
 import com.example.data.models.PaymentRecord
+import com.example.data.models.PaymentRequestItem
+import com.example.data.models.PaymentSetting
 import com.example.ui.components.SubscriptionFlowState
 import android.net.Uri
 import android.util.Log
@@ -73,6 +75,7 @@ data class HomeUiState(
     val filteredMatches: List<MatchItem> = emptyList(),
     val quickChannels: List<PlayableVideo> = emptyList(),
     val customCategories: List<String> = emptyList(),
+    val customMediaGenres: List<String> = emptyList(),
     val mediaCatalog: List<MediaItem> = emptyList(),
     val selectedMatch: MatchItem? = null,
     val selectedMatchChannels: List<ChannelOption> = emptyList(),
@@ -84,7 +87,7 @@ data class HomeUiState(
     val currentTab: NavigationTab = NavigationTab.MATCHES,
     val networkStatus: NetworkStatus = NetworkStatus(),
     val latestApkUrl: String = "",
-    val latestVersionName: String = "1.1.0",
+    val latestVersionName: String = "1.2.0",
     val hasStoredApk: Boolean = false,
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Float = 0f,
@@ -188,6 +191,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val paymentSetting: StateFlow<PaymentSetting> = subscriptionRepository.observePaymentSetting()
+        .catch { emit(PaymentSetting()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PaymentSetting())
+
+    val pendingPaymentRequests: StateFlow<List<PaymentRequestItem>> = subscriptionRepository.observePendingPaymentRequests()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private var activePaymentOrderJob: kotlinx.coroutines.Job? = null
 
     fun openSubscriptionDialog() {
@@ -208,6 +219,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissPaymentHistoryDialog() {
         _showPaymentHistoryDialog.value = false
+    }
+
+    fun updatePaymentRecord(
+        paymentId: String,
+        userName: String,
+        amountCents: Long,
+        captureMethod: String,
+        status: String,
+        receiptUrl: String,
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val result = subscriptionRepository.updatePaymentRecord(
+                paymentId = paymentId,
+                userName = userName,
+                amountCents = amountCents,
+                captureMethod = captureMethod,
+                status = status,
+                receiptUrl = receiptUrl
+            )
+            if (result.isSuccess) {
+                onResult(true, "Pagamento atualizado com sucesso!")
+            } else {
+                onResult(false, "Erro ao atualizar pagamento: ${result.exceptionOrNull()?.localizedMessage}")
+            }
+        }
+    }
+
+    fun changePaymentStatus(
+        paymentId: String,
+        newStatus: String,
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val result = subscriptionRepository.updatePaymentStatus(paymentId, newStatus)
+            if (result.isSuccess) {
+                onResult(true, "Status do pagamento alterado para $newStatus!")
+            } else {
+                onResult(false, "Erro ao alterar status: ${result.exceptionOrNull()?.localizedMessage}")
+            }
+        }
+    }
+
+    fun deletePaymentRecord(
+        paymentId: String,
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val result = subscriptionRepository.deletePaymentRecord(paymentId)
+            if (result.isSuccess) {
+                onResult(true, "Registro de pagamento excluído com sucesso!")
+            } else {
+                onResult(false, "Erro ao excluir pagamento: ${result.exceptionOrNull()?.localizedMessage}")
+            }
+        }
     }
 
     fun startSubscriptionPayment(context: Context) {
@@ -274,6 +340,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Atualiza o link de pagamento em settings/payment (Apenas ADMIN).
+     */
+    fun updatePaymentUrl(url: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        val admin = _currentUser.value
+        if (admin == null || (!isCurrentUserAdmin())) {
+            onResult(false, "Permissão negada. Apenas administradores podem alterar o link de pagamento.")
+            return
+        }
+
+        viewModelScope.launch {
+            val res = subscriptionRepository.updatePaymentSetting(url, admin.uid)
+            res.onSuccess {
+                onResult(true, null)
+            }.onFailure { err ->
+                onResult(false, err.localizedMessage ?: "Erro ao salvar link de pagamento.")
+            }
+        }
+    }
+
+    /**
+     * Cria solicitação manual de pagamento pelo usuário ("JÁ FIZ O PAGAMENTO").
+     */
+    fun createManualPaymentRequest(onResult: (Boolean, String) -> Unit) {
+        val user = _currentUser.value
+        if (user == null) {
+            onResult(false, "Usuário não autenticado.")
+            return
+        }
+
+        viewModelScope.launch {
+            val res = subscriptionRepository.createPaymentRequest(user)
+            res.onSuccess { msg ->
+                onResult(true, msg)
+            }.onFailure { err ->
+                onResult(false, err.localizedMessage ?: "Erro ao registrar solicitação de pagamento.")
+            }
+        }
+    }
+
+    /**
+     * Confirmação manual de pagamento realizada pelo ADMIN.
+     */
+    fun confirmManualPayment(requestItem: PaymentRequestItem, onResult: (Boolean, String) -> Unit) {
+        val admin = _currentUser.value
+        if (admin == null || (!isCurrentUserAdmin())) {
+            onResult(false, "Permissão negada. Apenas administradores podem confirmar pagamentos.")
+            return
+        }
+
+        viewModelScope.launch {
+            val res = subscriptionRepository.confirmManualPaymentRequest(requestItem, admin)
+            res.onSuccess { msg ->
+                onResult(true, msg)
+                if (_currentUser.value?.uid == requestItem.uid) {
+                    dismissSubscriptionDialog()
+                }
+            }.onFailure { err ->
+                onResult(false, err.localizedMessage ?: "Erro ao confirmar pagamento manual.")
+            }
+        }
+    }
+
     fun simulateAdminPaymentApproval(orderNsu: String) {
         viewModelScope.launch {
             val result = subscriptionRepository.simulateWebhookProcessing(orderNsu)
@@ -322,11 +451,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     openSubscriptionDialog()
                 }
 
-                // Se estava aguardando pagamento e a assinatura foi confirmada como ativa:
-                if (updatedUser.canAccessPremiumContent() && _subscriptionFlowState.value is SubscriptionFlowState.AwaitingPayment) {
-                    _subscriptionFlowState.value = SubscriptionFlowState.Success(
-                        "Assinatura renovada com sucesso! Seu acesso foi estendido por 30 dias."
-                    )
+                if (updatedUser.canAccessPremiumContent()) {
+                    if (_showSubscriptionDialog.value) {
+                        dismissSubscriptionDialog()
+                    }
+                    if (_subscriptionFlowState.value is SubscriptionFlowState.AwaitingPayment) {
+                        _subscriptionFlowState.value = SubscriptionFlowState.Success(
+                            "Assinatura renovada com sucesso! Seu acesso foi estendido por 30 dias."
+                        )
+                    }
                 }
 
                 val remoteDeviceId = updatedUser.deviceId.ifBlank { updatedUser.sessionToken }
@@ -349,7 +482,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val savedUrl = sharedPrefs.getString("latest_apk_url", "") ?: ""
-        val savedVersion = sharedPrefs.getString("latest_version_name", "1.1.0") ?: "1.1.0"
+        val savedVersion = sharedPrefs.getString("latest_version_name", "1.2.0") ?: "1.2.0"
         val savedWvcUrl = sharedPrefs.getString("wvc_apk_url", "") ?: ""
         val defaultWvcUrl = "https://github.com/instantbits/WebVideoCaster/releases/download/v5.7.0/WebVideoCaster-v5.7.0.apk"
         val finalWvcUrl = if (savedWvcUrl.isNotBlank()) savedWvcUrl else defaultWvcUrl
@@ -357,10 +490,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(
             quickChannels = repository.getQuickChannels(),
             customCategories = repository.getCustomCategories(),
+            customMediaGenres = repository.getCustomMediaGenres(),
             mediaCatalog = repository.getMediaCatalog(),
             latestApkUrl = savedUrl,
             latestVersionName = savedVersion,
-            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.1.0",
+            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.2.0",
             webVideoCasterUrl = finalWvcUrl,
             supportWhatsappNumber = repository.getSupportWhatsappNumber(),
             autoCorrectionLogs = repository.getAutoCorrectionLogs(),
@@ -850,11 +984,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         url: String,
         isWebPlayer: Boolean,
         category: String = "Esportes",
-        isWorking: Boolean = true
+        isWorking: Boolean = true,
+        logoUrl: String? = null
     ) {
         val cleanUrl = url.trim()
         val cleanTitle = if (title.isNotBlank()) title.trim() else "Canal Rápido"
         val cleanSubtitle = if (subtitle.isNotBlank()) subtitle.trim() else "Canal Adicionado por Admin"
+        val cleanLogo = logoUrl?.trim()?.takeIf { it.isNotBlank() }
         val id = "custom_${System.currentTimeMillis()}"
 
         val newChannel = PlayableVideo(
@@ -862,6 +998,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             title = cleanTitle,
             subtitle = cleanSubtitle,
             streamUrl = cleanUrl,
+            posterUrl = cleanLogo,
             embedUrl = if (isWebPlayer) cleanUrl else null,
             forceWebPlayer = isWebPlayer,
             isLive = true,
@@ -921,19 +1058,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         url: String,
         isWebPlayer: Boolean,
         category: String = "Esportes",
-        isWorking: Boolean? = null
+        isWorking: Boolean? = null,
+        logoUrl: String? = null
     ) {
         val cleanUrl = url.trim()
         val cleanTitle = if (title.isNotBlank()) title.trim() else "Canal Rápido"
         val cleanSubtitle = if (subtitle.isNotBlank()) subtitle.trim() else ""
+        val cleanLogo = logoUrl?.trim()?.takeIf { it.isNotBlank() }
 
         val existing = _uiState.value.quickChannels.find { it.id == id }
         val targetWorking = isWorking ?: existing?.isWorking ?: true
+        val finalPoster = if (logoUrl != null) cleanLogo else existing?.posterUrl
+
         val updatedChannel = (existing ?: PlayableVideo(id = id, title = cleanTitle, subtitle = cleanSubtitle, streamUrl = cleanUrl)).copy(
             id = id,
             title = cleanTitle,
             subtitle = cleanSubtitle,
             streamUrl = cleanUrl,
+            posterUrl = finalPoster,
             embedUrl = if (isWebPlayer) cleanUrl else existing?.embedUrl,
             forceWebPlayer = isWebPlayer,
             isLive = true,
@@ -1245,6 +1387,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleMediaFavorite(id: String) {
         val updated = repository.toggleMediaFavorite(id)
         _uiState.value = _uiState.value.copy(mediaCatalog = updated)
+    }
+
+    fun addMediaGenre(genre: String) {
+        val updated = repository.addCustomMediaGenre(genre)
+        _uiState.value = _uiState.value.copy(customMediaGenres = updated)
+    }
+
+    fun renameMediaGenre(oldGenre: String, newGenre: String) {
+        val updated = repository.renameCustomMediaGenre(oldGenre, newGenre)
+        _uiState.value = _uiState.value.copy(
+            customMediaGenres = updated,
+            mediaCatalog = repository.getMediaCatalog()
+        )
+    }
+
+    fun deleteMediaGenre(genre: String) {
+        val updated = repository.deleteCustomMediaGenre(genre)
+        _uiState.value = _uiState.value.copy(customMediaGenres = updated)
     }
 
     private fun isDirectMedia(url: String): Boolean {
