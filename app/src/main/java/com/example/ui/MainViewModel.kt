@@ -41,8 +41,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-
 import com.example.notifications.AppNotificationManager
+import com.example.server.WebAdminServer
 import com.example.util.SearchUtils
 import kotlinx.coroutines.delay
 
@@ -116,7 +116,12 @@ data class HomeUiState(
     val nextEpisodeItem: EpisodeItem? = null,
     val watchProgressMap: Map<String, com.example.data.WatchProgress> = emptyMap(),
     val initialPlaybackPositionMs: Long = 0L,
-    val webAdminUrl: String = "https://futeplayer-2b630.web.app"
+    val webAdminUrl: String = "http://127.0.0.1:8765",
+    val isWebAdminServerRunning: Boolean = false,
+    val localWebAdminUrl: String = "http://127.0.0.1:8765",
+    val lanWebAdminUrl: String = "http://127.0.0.1:8765",
+    val showWebAdminDialog: Boolean = false,
+    val showInAppWebAdmin: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -126,6 +131,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val userRepository = UserRepository(application)
     private val notificationManager = AppNotificationManager(application)
     private val watchProgressRepository = com.example.data.WatchProgressRepository(application)
+    private val webAdminServer = WebAdminServer.getInstance(application, repository)
 
     private val movieApiRepository = com.example.data.MovieApiRepository(application)
     private val _movieApiSources = MutableStateFlow<List<com.example.data.models.MovieApiSource>>(emptyList())
@@ -507,11 +513,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             supportWhatsappNumber = repository.getSupportWhatsappNumber(),
             autoCorrectionLogs = repository.getAutoCorrectionLogs(),
             watchProgressMap = watchProgressRepository.progressFlow.value,
-            webAdminUrl = repository.getWebAdminUrl()
+            webAdminUrl = repository.getWebAdminUrl(),
+            localWebAdminUrl = webAdminServer.getWebUrl(forExternalDevice = false),
+            lanWebAdminUrl = webAdminServer.getWebUrl(forExternalDevice = true)
         )
 
+        webAdminServer.onDataUpdatedListener = {
+            viewModelScope.launch {
+                Log.i("MainViewModel", "Conteúdo adicionado via Painel Web! Atualizando app...")
+                val updatedChannels = repository.getQuickChannels()
+                val updatedMedia = repository.getMediaCatalog()
+                _uiState.value = _uiState.value.copy(
+                    quickChannels = updatedChannels,
+                    mediaCatalog = updatedMedia
+                )
+            }
+        }
+
         repository.syncWebAdminUrlFromFirestore { url ->
-            if (url.isNotBlank()) {
+            if (url.isNotBlank() && !url.contains("futeplayer-2b630.web.app")) {
                 _uiState.value = _uiState.value.copy(webAdminUrl = url)
             }
         }
@@ -2080,14 +2100,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openWebAdminInBrowser(context: Context) {
         try {
-            val rawUrl = _uiState.value.webAdminUrl.ifBlank { "https://futeplayer-2b630.web.app" }
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            webAdminServer.start { port, localUrl ->
+                val lanUrl = webAdminServer.getWebUrl(forExternalDevice = true)
+                _uiState.value = _uiState.value.copy(
+                    isWebAdminServerRunning = true,
+                    localWebAdminUrl = localUrl,
+                    lanWebAdminUrl = lanUrl
+                )
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(localUrl)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Erro ao disparar intent do navegador: ${e.message}", e)
+                }
             }
-            context.startActivity(intent)
         } catch (e: Exception) {
-            Log.e("MainViewModel", "Erro ao abrir painel web: ${e.message}", e)
+            Log.e("MainViewModel", "Erro ao iniciar WebAdminServer: ${e.message}", e)
         }
+    }
+
+    fun openWebAdminOptionsDialog() {
+        val isRunning = webAdminServer.isServerRunning()
+        val localUrl = webAdminServer.getWebUrl(forExternalDevice = false)
+        val lanUrl = webAdminServer.getWebUrl(forExternalDevice = true)
+        _uiState.value = _uiState.value.copy(
+            showWebAdminDialog = true,
+            isWebAdminServerRunning = isRunning,
+            localWebAdminUrl = localUrl,
+            lanWebAdminUrl = lanUrl
+        )
+    }
+
+    fun closeWebAdminOptionsDialog() {
+        _uiState.value = _uiState.value.copy(showWebAdminDialog = false)
+    }
+
+    fun openInAppWebAdmin(context: Context) {
+        try {
+            webAdminServer.start { port, localUrl ->
+                val lanUrl = webAdminServer.getWebUrl(forExternalDevice = true)
+                _uiState.value = _uiState.value.copy(
+                    showInAppWebAdmin = true,
+                    showWebAdminDialog = false,
+                    isWebAdminServerRunning = true,
+                    localWebAdminUrl = localUrl,
+                    lanWebAdminUrl = lanUrl
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Erro ao abrir painel interno: ${e.message}", e)
+        }
+    }
+
+    fun closeInAppWebAdmin() {
+        _uiState.value = _uiState.value.copy(showInAppWebAdmin = false)
+    }
+
+    fun shareWebAdminHtml(context: Context) {
+        webAdminServer.shareAdminHtml(context)
     }
 
     fun publishCustomNotification(title: String, message: String) {

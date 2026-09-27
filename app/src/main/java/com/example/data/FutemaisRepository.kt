@@ -318,11 +318,16 @@ class FutemaisRepository(context: Context) {
     }
 
     fun getWebAdminUrl(): String {
-        return prefs.getString("web_admin_url", "https://futeplayer-2b630.web.app") ?: "https://futeplayer-2b630.web.app"
+        val saved = prefs.getString("web_admin_url", null)
+        return if (saved.isNullOrBlank() || saved.contains("futeplayer-2b630.web.app")) {
+            "http://127.0.0.1:8765"
+        } else {
+            saved
+        }
     }
 
     fun saveWebAdminUrl(url: String) {
-        val cleanUrl = url.trim().ifBlank { "https://futeplayer-2b630.web.app" }
+        val cleanUrl = url.trim().ifBlank { "http://127.0.0.1:8765" }
         prefs.edit().putString("web_admin_url", cleanUrl).apply()
         val data = hashMapOf(
             "web_admin_url" to cleanUrl,
@@ -444,7 +449,7 @@ class FutemaisRepository(context: Context) {
         }
     }
 
-    private fun saveCustomCategories(categories: List<String>) {
+    fun saveCustomCategories(categories: List<String>) {
         try {
             val arr = org.json.JSONArray()
             categories.forEach { cat ->
@@ -1570,7 +1575,7 @@ class FutemaisRepository(context: Context) {
         }
     }
 
-    private fun saveCustomMediaGenres(genres: List<String>) {
+    fun saveCustomMediaGenres(genres: List<String>) {
         try {
             val arr = org.json.JSONArray()
             genres.forEach { g ->

@@ -35,6 +35,8 @@ import com.example.ui.screens.UserManagementScreen
 import com.example.ui.components.SubscriptionDialog
 import com.example.ui.components.PaymentHistoryDialog
 import com.example.ui.components.AdminPendingPaymentsDialog
+import com.example.ui.components.WebAdminDialog
+import com.example.ui.components.WebAdminWebViewScreen
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : AppCompatActivity() {
@@ -259,7 +261,7 @@ class MainActivity : AppCompatActivity() {
                                         viewModel.confirmManualPayment(req, cb)
                                     },
                                     onOpenWebAdmin = {
-                                        viewModel.openWebAdminInBrowser(this@MainActivity)
+                                        viewModel.openWebAdminOptionsDialog()
                                     },
                                     onUpdateWebAdminUrl = { newUrl ->
                                         viewModel.updateWebAdminUrl(newUrl)
@@ -451,6 +453,27 @@ class MainActivity : AppCompatActivity() {
                                 onDismiss = {
                                     dismissedAdminRequestIds = dismissedAdminRequestIds + pendingPaymentRequests.map { it.id }
                                 }
+                            )
+                        }
+
+                        WebAdminDialog(
+                            isOpen = uiState.showWebAdminDialog,
+                            localUrl = uiState.localWebAdminUrl,
+                            lanUrl = uiState.lanWebAdminUrl,
+                            isServerRunning = uiState.isWebAdminServerRunning,
+                            onDismiss = { viewModel.closeWebAdminOptionsDialog() },
+                            onOpenInBrowser = { viewModel.openWebAdminInBrowser(this@MainActivity) },
+                            onOpenInApp = { viewModel.openInAppWebAdmin(this@MainActivity) },
+                            onShareHtml = { viewModel.shareWebAdminHtml(this@MainActivity) },
+                            customUrl = uiState.webAdminUrl,
+                            onUpdateCustomUrl = { viewModel.updateWebAdminUrl(it) }
+                        )
+
+                        if (uiState.showInAppWebAdmin) {
+                            WebAdminWebViewScreen(
+                                url = uiState.localWebAdminUrl,
+                                onClose = { viewModel.closeInAppWebAdmin() },
+                                onOpenExternalBrowser = { viewModel.openWebAdminInBrowser(this@MainActivity) }
                             )
                         }
                     }

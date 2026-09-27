@@ -1743,6 +1743,20 @@
     }
 
     async function syncChannelsToFirestore() {
+      // Sincroniza via REST local no app
+      try {
+        fetch('/api/sync/channels', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channels: channelsList,
+            categories: channelCategories,
+            deletedIds: deletedChannelIds,
+            offlineIds: offlineChannelIds
+          })
+        }).catch(() => {});
+      } catch (e) {}
+
       if (!db) return;
       try {
         await db.collection("app_data").doc("channels").set({
@@ -2246,6 +2260,19 @@
     }
 
     async function syncMediaToFirestore() {
+      // Sincroniza via REST local no app
+      try {
+        fetch('/api/sync/media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            media: mediaCatalogList,
+            genres: mediaGenres,
+            deletedIds: deletedMediaIds
+          })
+        }).catch(() => {});
+      } catch (e) {}
+
       if (!db) return;
       try {
         await db.collection("app_data").doc("media_catalog").set({

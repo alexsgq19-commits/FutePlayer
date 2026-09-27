@@ -5245,9 +5245,10 @@ fun SupportContent(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = uiState.webAdminUrl.ifBlank { "https://futeplayer-2b630.web.app" },
+                                    text = if (uiState.lanWebAdminUrl.isNotBlank()) uiState.lanWebAdminUrl else uiState.localWebAdminUrl,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                                    color = StadiumGreenPrimary,
+                                    fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f)
@@ -5292,9 +5293,9 @@ fun SupportContent(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Abrir Painel no Navegador",
+                                text = "Acessar Painel Web (Celular / PC / App)",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
+                                fontSize = 13.sp
                             )
                         }
 
@@ -5303,7 +5304,7 @@ fun SupportContent(
                         // Botão Secundário: Copiar Link do Painel
                         OutlinedButton(
                             onClick = {
-                                val url = uiState.webAdminUrl.ifBlank { "https://futeplayer-2b630.web.app" }
+                                val url = if (uiState.lanWebAdminUrl.isNotBlank()) uiState.lanWebAdminUrl else uiState.localWebAdminUrl
                                 clipboardManager.setText(AnnotatedString(url))
                                 Toast.makeText(context, "Link do painel copiado: $url", Toast.LENGTH_SHORT).show()
                             },
