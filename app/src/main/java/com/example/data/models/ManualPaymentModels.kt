@@ -12,7 +12,19 @@ data class PaymentSetting(
     @get:PropertyName("durationDays") @set:PropertyName("durationDays") var durationDays: Int = 30,
     @get:PropertyName("updatedAt") @set:PropertyName("updatedAt") var updatedAt: Long = 0L,
     @get:PropertyName("updatedBy") @set:PropertyName("updatedBy") var updatedBy: String = ""
-)
+) {
+    fun getFormattedAmount(): String {
+        val safeCents = if (amountCents > 0L) amountCents else 1000L
+        val reais = safeCents / 100.0
+        return String.format(Locale("pt", "BR"), "R$ %.2f", reais)
+    }
+
+    fun getAmountInReaisString(): String {
+        val safeCents = if (amountCents > 0L) amountCents else 1000L
+        val reais = safeCents / 100.0
+        return String.format(Locale("pt", "BR"), "%.2f", reais)
+    }
+}
 
 data class PaymentRequestItem(
     @get:PropertyName("id") @set:PropertyName("id") var id: String = "",

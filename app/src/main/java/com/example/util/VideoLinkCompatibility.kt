@@ -35,8 +35,8 @@ object VideoLinkCompatibility {
         if (rawUrl.isNullOrBlank()) return false
         val clean = rawUrl.trim().lowercase()
 
-        // Exclude dummy ad videos
-        if (isAdVideoUrl(clean)) {
+        // Exclude dummy ad videos and HTML iframe snippets
+        if (isAdVideoUrl(clean) || clean.contains("<iframe")) {
             return false
         }
 

@@ -49,8 +49,14 @@ data class PlayableVideo(
     val isFavorite: Boolean = false,
     val forceWebPlayer: Boolean = false,
     val category: String? = null,
-    val isWorking: Boolean = true
+    val isWorking: Boolean = true,
+    val isIframe: Boolean = false
 )
+
+val PlayableVideo.isIframeContent: Boolean
+    get() = isIframe ||
+            streamUrl.contains("<iframe", ignoreCase = true) ||
+            (embedUrl?.contains("<iframe", ignoreCase = true) == true)
 
 val PlayableVideo.isSeries: Boolean
     get() {

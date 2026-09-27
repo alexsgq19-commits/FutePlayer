@@ -308,17 +308,26 @@ fun PlayerScreen(
     
     val activeStreamUrl = sniffedMediaUrl ?: video.streamUrl
 
+    val isIframeRequested = remember(video.isIframe, video.streamUrl, video.embedUrl) {
+        video.isIframe || 
+        video.streamUrl.contains("<iframe", ignoreCase = true) || 
+        video.embedUrl?.contains("<iframe", ignoreCase = true) == true
+    }
     // Auto-detect if direct HLS / video media URL is available or if web player should be primary
     val hasDirectMediaUrl = remember(activeStreamUrl) {
-        val url = activeStreamUrl.lowercase()
-        com.example.util.VideoLinkCompatibility.isDirectMediaStream(url) &&
-        !url.contains(".php") && !url.contains("cxtv.com.br/tv-ao-vivo") && !url.contains("temporariofutemais") || sniffedMediaUrl != null
+        if (isIframeRequested) false
+        else {
+            val url = activeStreamUrl.lowercase()
+            com.example.util.VideoLinkCompatibility.isDirectMediaStream(url) &&
+            !url.contains(".php") && !url.contains("cxtv.com.br/tv-ao-vivo") && !url.contains("temporariofutemais") || sniffedMediaUrl != null
+        }
     }
     val initialHasDirectMedia = remember(video.streamUrl) {
-        com.example.util.VideoLinkCompatibility.isDirectMediaStream(video.streamUrl.lowercase())
+        if (isIframeRequested) false
+        else com.example.util.VideoLinkCompatibility.isDirectMediaStream(video.streamUrl.lowercase())
     }
-    var useWebviewPlayer by remember(video.streamUrl, video.embedUrl, video.forceWebPlayer) { 
-        mutableStateOf(video.forceWebPlayer || !initialHasDirectMedia || !video.embedUrl.isNullOrBlank()) 
+    var useWebviewPlayer by remember(video.streamUrl, video.embedUrl, video.forceWebPlayer, isIframeRequested) { 
+        mutableStateOf(isIframeRequested || video.forceWebPlayer || !initialHasDirectMedia || !video.embedUrl.isNullOrBlank()) 
     }
     var activeEmbedUrl by remember(video.embedUrl, video.streamUrl) {
         mutableStateOf(video.embedUrl?.takeIf { it.isNotBlank() } ?: video.streamUrl)
@@ -372,7 +381,7 @@ fun PlayerScreen(
     val isMovieOrSeries = !video.isLive
 
     LaunchedEffect(sniffedMediaUrl) {
-        if (sniffedMediaUrl != null && isMovieOrSeries) {
+        if (sniffedMediaUrl != null && isMovieOrSeries && !isIframeRequested && !video.forceWebPlayer) {
             useWebviewPlayer = false
             isSniffingMedia = false
         }
@@ -828,6 +837,11 @@ fun PlayerScreen(
                                             return super.shouldInterceptRequest(view, request)
                                         }
 
+                                        // Allow subframe requests inside iframe without aggressive blocking
+                                        if (request?.isForMainFrame == false && isIframeRequested) {
+                                            return super.shouldInterceptRequest(view, request)
+                                        }
+
                                         // Block ad domains only for movies/series when NOT a media stream
                                         if (isMovieOrSeries && com.example.util.AdBlocker.isAd(reqUrl)) {
                                             return com.example.util.AdBlocker.createEmptyResource()
@@ -844,6 +858,10 @@ fun PlayerScreen(
                                         // Block intrusive redirects and store schemes
                                         if (reqUrl.startsWith("intent:") || reqUrl.startsWith("market:") || reqUrl.startsWith("whatsapp:") || reqUrl.startsWith("tg:") || reqUrl.startsWith("mailto:") || reqUrl.startsWith("tel:")) {
                                             return true
+                                        }
+                                        // Allow subframe requests inside iframe without blocking
+                                        if (request?.isForMainFrame == false) {
+                                            return false
                                         }
                                         // Block ad redirects for movies and series
                                         if (isMovieOrSeries && com.example.util.AdBlocker.isAd(reqUrl)) {
@@ -982,15 +1000,82 @@ fun PlayerScreen(
                                 }
 
                                 val targetStream = activeEmbedUrl.ifBlank { video.streamUrl }
-                                val isFutemais = targetStream.contains("futemais", ignoreCase = true) || targetStream.contains("temporariofutemais", ignoreCase = true)
-                                val isDirectMedia = (
+                                val isIframeSnippet = targetStream.contains("<iframe", ignoreCase = true)
+                                val treatAsIframe = isIframeSnippet || isIframeRequested
+                                val isFutemais = !treatAsIframe && (targetStream.contains("futemais", ignoreCase = true) || targetStream.contains("temporariofutemais", ignoreCase = true))
+                                val isDirectMedia = !treatAsIframe && (
                                     targetStream.contains(".m3u8", ignoreCase = true) || 
                                     targetStream.contains(".mp4", ignoreCase = true) ||
                                     targetStream.contains(".ts", ignoreCase = true)
-                                ) && !isFutemais
-                                val isHttpUrl = targetStream.startsWith("http://", ignoreCase = true) || targetStream.startsWith("https://", ignoreCase = true)
+                                )
+                                val isHttpUrl = !treatAsIframe && (targetStream.startsWith("http://", ignoreCase = true) || targetStream.startsWith("https://", ignoreCase = true))
 
-                                if (isFutemais) {
+                                if (treatAsIframe) {
+                                    val iframeHtml = if (targetStream.contains("<iframe", ignoreCase = true)) {
+                                        var cleanSnippet = targetStream.trim()
+                                        if (!cleanSnippet.contains("</iframe>", ignoreCase = true)) {
+                                            if (cleanSnippet.endsWith("iframe>", ignoreCase = true)) {
+                                                cleanSnippet = cleanSnippet.substringBeforeLast("iframe>") + "</iframe>"
+                                            } else {
+                                                cleanSnippet = "$cleanSnippet</iframe>"
+                                            }
+                                        }
+                                        """
+                                        <!DOCTYPE html>
+                                        <html>
+                                        <head>
+                                            <meta charset="utf-8">
+                                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                                            <style>
+                                                * { box-sizing: border-box; margin: 0; padding: 0; }
+                                                html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+                                                iframe { width: 100vw !important; height: 100vh !important; border: 0 !important; background: #000; }
+                                            </style>
+                                        </head>
+                                        <body>
+                                            $cleanSnippet
+                                        </body>
+                                        </html>
+                                        """.trimIndent()
+                                    } else {
+                                        """
+                                        <!DOCTYPE html>
+                                        <html>
+                                        <head>
+                                            <meta charset="utf-8">
+                                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                                            <style>
+                                                * { box-sizing: border-box; margin: 0; padding: 0; }
+                                                html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+                                                iframe { width: 100vw !important; height: 100vh !important; border: 0 !important; background: #000; }
+                                            </style>
+                                        </head>
+                                        <body>
+                                            <iframe src="$targetStream" allowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"></iframe>
+                                        </body>
+                                        </html>
+                                        """.trimIndent()
+                                    }
+
+                                    val baseDomain = try {
+                                        val srcUrl = if (targetStream.contains("<iframe", ignoreCase = true)) {
+                                            val srcRegex = """src=["'](.*?)["']""".toRegex(RegexOption.IGNORE_CASE)
+                                            srcRegex.find(targetStream)?.groupValues?.get(1) ?: targetStream
+                                        } else {
+                                            targetStream
+                                        }
+                                        val uri = Uri.parse(srcUrl)
+                                        if (!uri.scheme.isNullOrBlank() && !uri.host.isNullOrBlank()) {
+                                            "${uri.scheme}://${uri.host}/"
+                                        } else {
+                                            "https://futemais.link/"
+                                        }
+                                    } catch (_: Exception) {
+                                        "https://futemais.link/"
+                                    }
+
+                                    loadDataWithBaseURL(baseDomain, iframeHtml, "text/html", "UTF-8", null)
+                                } else if (isFutemais) {
                                     val headers = mutableMapOf("Referer" to "https://futemais.link/")
                                     video.headers?.let { headers.putAll(it) }
                                     loadUrl(targetStream, headers)
@@ -1066,24 +1151,7 @@ fun PlayerScreen(
                                         loadUrl(targetStream)
                                     }
                                 } else {
-                                    val iframeHtml = """
-                                        <!DOCTYPE html>
-                                        <html>
-                                        <head>
-                                            <meta charset="utf-8">
-                                            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                                            <style>
-                                                * { box-sizing: border-box; margin: 0; padding: 0; }
-                                                html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; }
-                                                iframe { width: 100%; height: 100%; border: none; background: #000; }
-                                            </style>
-                                        </head>
-                                        <body>
-                                            <iframe src="$targetStream" allowfullscreen="true" webkitallowfullscreen="true" mozallowfullscreen="true" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
-                                        </body>
-                                        </html>
-                                    """.trimIndent()
-                                    loadDataWithBaseURL(targetStream, iframeHtml, "text/html", "UTF-8", null)
+                                    loadUrl(targetStream)
                                 }
                             }.also { webViewInstance = it }
                         },
@@ -1687,7 +1755,7 @@ fun PlayerScreen(
                         // Center Controls (10s back, Play/Pause, 10s forward)
                         Row(
                             modifier = Modifier.align(Alignment.Center),
-                            horizontalArrangement = Arrangement.spacedBy(28.dp),
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
@@ -1697,7 +1765,7 @@ fun PlayerScreen(
                                     }
                                 },
                                 modifier = Modifier
-                                    .size(48.dp)
+                                    .size(42.dp)
                                     .clip(CircleShape)
                                     .background(Color.Black.copy(alpha = 0.5f))
                             ) {
@@ -1705,13 +1773,13 @@ fun PlayerScreen(
                                     imageVector = Icons.Default.Replay10,
                                     contentDescription = "Voltar 10 segundos",
                                     tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
 
                             Box(
                                 modifier = Modifier
-                                    .size(68.dp)
+                                    .size(56.dp)
                                     .clip(CircleShape)
                                     .background(
                                         Brush.linearGradient(
@@ -1728,7 +1796,7 @@ fun PlayerScreen(
                                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                     contentDescription = if (isPlaying) "Pausar" else "Reproduzir",
                                     tint = Color.Black,
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(28.dp)
                                 )
                             }
 
@@ -1739,7 +1807,7 @@ fun PlayerScreen(
                                     }
                                 },
                                 modifier = Modifier
-                                    .size(48.dp)
+                                    .size(42.dp)
                                     .clip(CircleShape)
                                     .background(Color.Black.copy(alpha = 0.5f))
                             ) {
@@ -1747,7 +1815,7 @@ fun PlayerScreen(
                                     imageVector = Icons.Default.Forward10,
                                     contentDescription = "Avançar 10 segundos",
                                     tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
@@ -2212,7 +2280,7 @@ fun CastPlaybackHub(
                             IconButton(
                                 onClick = onSeekCastBackward,
                                 modifier = Modifier
-                                    .size(54.dp)
+                                    .size(46.dp)
                                     .clip(CircleShape)
                                     .background(Color.White.copy(alpha = 0.12f))
                             ) {
@@ -2220,7 +2288,7 @@ fun CastPlaybackHub(
                                     imageVector = Icons.Default.Replay10,
                                     contentDescription = "Voltar 10s",
                                     tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
@@ -2239,7 +2307,7 @@ fun CastPlaybackHub(
                             IconButton(
                                 onClick = onTogglePlayPause,
                                 modifier = Modifier
-                                    .size(68.dp)
+                                    .size(56.dp)
                                     .clip(CircleShape)
                                     .background(StadiumGreenPrimary)
                             ) {
@@ -2247,7 +2315,7 @@ fun CastPlaybackHub(
                                     imageVector = if (castUiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                     contentDescription = if (castUiState.isPlaying) "Pausar TV" else "Reproduzir TV",
                                     tint = Color.Black,
-                                    modifier = Modifier.size(38.dp)
+                                    modifier = Modifier.size(30.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
@@ -2267,7 +2335,7 @@ fun CastPlaybackHub(
                             IconButton(
                                 onClick = onSeekCastForward,
                                 modifier = Modifier
-                                    .size(54.dp)
+                                    .size(46.dp)
                                     .clip(CircleShape)
                                     .background(Color.White.copy(alpha = 0.12f))
                             ) {
@@ -2275,7 +2343,7 @@ fun CastPlaybackHub(
                                     imageVector = Icons.Default.Forward10,
                                     contentDescription = "Avançar 10s",
                                     tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
@@ -2295,7 +2363,7 @@ fun CastPlaybackHub(
                                 IconButton(
                                     onClick = onPlayNextEpisode,
                                     modifier = Modifier
-                                        .size(54.dp)
+                                        .size(46.dp)
                                         .clip(CircleShape)
                                         .background(Color(0xFFD500F9))
                                 ) {
@@ -2303,7 +2371,7 @@ fun CastPlaybackHub(
                                         imageVector = Icons.Default.SkipNext,
                                         contentDescription = "Próximo Episódio",
                                         tint = Color.White,
-                                        modifier = Modifier.size(28.dp)
+                                        modifier = Modifier.size(22.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
@@ -2317,7 +2385,7 @@ fun CastPlaybackHub(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     // Secondary Action Buttons
                     Row(
@@ -2328,7 +2396,9 @@ fun CastPlaybackHub(
                         // Reload/Re-sync live stream button
                         OutlinedButton(
                             onClick = onReloadCast,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.height(36.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = StadiumGreenPrimary
                             )
@@ -2336,10 +2406,10 @@ fun CastPlaybackHub(
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Recarregar", fontSize = 12.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Recarregar", fontSize = 11.sp)
                         }
 
                         // Web Video Caster launcher
@@ -2351,7 +2421,9 @@ fun CastPlaybackHub(
                                     title = video.title
                                 )
                             },
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.height(36.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = StadiumCyanSecondary
                             )
@@ -2359,16 +2431,18 @@ fun CastPlaybackHub(
                             Icon(
                                 imageVector = Icons.Default.Cast,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Web Video Caster", fontSize = 12.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("WVC Caster", fontSize = 11.sp)
                         }
 
                         // Disconnect Cast
                         OutlinedButton(
                             onClick = onDisconnect,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.height(36.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = StadiumAccentRed
                             )
@@ -2376,10 +2450,10 @@ fun CastPlaybackHub(
                             Icon(
                                 imageVector = Icons.Default.TvOff,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Desconectar", fontSize = 12.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Desconectar", fontSize = 11.sp)
                         }
                     }
                 }

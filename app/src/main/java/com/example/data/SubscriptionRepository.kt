@@ -389,15 +389,15 @@ class SubscriptionRepository(private val context: Context) {
     }
 
     /**
-     * Salva ou atualiza o link de pagamento em settings/payment (Apenas ADMIN).
+     * Salva ou atualiza o link e valor de pagamento em settings/payment (Apenas ADMIN).
      */
-    suspend fun updatePaymentSetting(paymentUrl: String, adminUid: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun updatePaymentSetting(paymentUrl: String, amountCents: Long = RENEWAL_AMOUNT_CENTS, adminUid: String): Result<Unit> = withContext(Dispatchers.IO) {
         val db = firestore ?: return@withContext Result.failure(IllegalStateException("Firestore indisponível"))
         try {
             val data = hashMapOf<String, Any>(
                 "paymentUrl" to paymentUrl.trim(),
                 "enabled" to true,
-                "amountCents" to RENEWAL_AMOUNT_CENTS,
+                "amountCents" to amountCents,
                 "durationDays" to 30,
                 "updatedAt" to System.currentTimeMillis(),
                 "updatedBy" to adminUid
@@ -413,7 +413,7 @@ class SubscriptionRepository(private val context: Context) {
     /**
      * Registra uma solicitação de pagamento ("JÁ FIZ O PAGAMENTO") na coleção payment_requests.
      */
-    suspend fun createPaymentRequest(user: User): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun createPaymentRequest(user: User, amountCents: Long = RENEWAL_AMOUNT_CENTS): Result<String> = withContext(Dispatchers.IO) {
         val db = firestore ?: return@withContext Result.failure(IllegalStateException("Firestore indisponível"))
         val uid = user.uid
         if (uid.isBlank()) {
@@ -435,6 +435,14 @@ class SubscriptionRepository(private val context: Context) {
                 return@withContext Result.success("Sua solicitação de pagamento já está pendente e em análise pelo administrador.")
             }
 
+            // Obtém amountCents atualizado do Firestore se disponível
+            val effectiveAmountCents = try {
+                val snap = db.collection("settings").document("payment").get().await()
+                snap.getLong("amountCents") ?: amountCents
+            } catch (_: Exception) {
+                amountCents
+            }
+
             val docRef = db.collection("payment_requests").document()
             val now = System.currentTimeMillis()
             val data = hashMapOf<String, Any>(
@@ -443,7 +451,7 @@ class SubscriptionRepository(private val context: Context) {
                 "userName" to user.name,
                 "userCpf" to user.cpf,
                 "userPhone" to user.phone,
-                "amountCents" to RENEWAL_AMOUNT_CENTS,
+                "amountCents" to effectiveAmountCents,
                 "durationDays" to 30,
                 "status" to "PENDING",
                 "createdAt" to now,

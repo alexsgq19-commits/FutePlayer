@@ -34,6 +34,11 @@ service cloud.firestore {
       allow write: if request.auth.token.role == 'ADMIN';
     }
 
+    // Dados do Aplicativo: Canais, Filmes e Séries
+    match /app_data/{document=**} {
+      allow read, write: if true;
+    }
+
     // Configurações Globais do App (incluindo link de pagamento em settings/payment)
     match /settings/{document=**} {
       allow read: if true;

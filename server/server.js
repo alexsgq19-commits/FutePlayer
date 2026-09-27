@@ -29,9 +29,11 @@ const cors = require("cors");
 const axios = require("axios");
 const admin = require("firebase-admin");
 
+const path = require("path");
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
 
 // ==========================================
 // 1. INICIALIZAÇÃO DO FIREBASE ADMIN SDK
@@ -89,6 +91,11 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => {
   res.status(200).send("OK");
+});
+
+// Painel Web do Administrador
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // ==========================================

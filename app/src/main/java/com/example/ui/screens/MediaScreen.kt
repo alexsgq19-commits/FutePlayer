@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
@@ -165,6 +166,7 @@ fun MediaScreenContent(
     onAddMediaGenre: (String) -> Unit = {},
     onRenameMediaGenre: (String, String) -> Unit = { _, _ -> },
     onDeleteMediaGenre: (String) -> Unit = {},
+    onOpenWebAdmin: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -483,6 +485,43 @@ fun MediaScreenContent(
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = NeonGreen,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
+                    // Botão Painel Web (Navegador)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF00E5FF).copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .clickable {
+                                onOpenWebAdmin()
+                            }
+                            .testTag("btn_media_open_web_admin")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Language,
+                                contentDescription = "Painel Web",
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Painel Web",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00E5FF),
                                 maxLines = 1
                             )
                         }
@@ -2408,14 +2447,9 @@ fun AddEditMediaDialog(
                         OutlinedTextField(
                             value = movieStreamUrl,
                             onValueChange = { text -> 
-                                var processed = text
-                                if (processed.contains("<iframe", ignoreCase = true) && processed.contains("src=\"", ignoreCase = true)) {
-                                    val regex = Regex("src=\"([^\"]+)\"")
-                                    val match = regex.find(processed)
-                                    if (match != null) {
-                                        processed = match.groupValues[1]
-                                        isMovieWebPlayer = true
-                                    }
+                                val processed = text
+                                if (processed.contains("<iframe", ignoreCase = true)) {
+                                    isMovieWebPlayer = true
                                 }
                                 movieStreamUrl = processed
                             },
@@ -2725,14 +2759,9 @@ fun AddEditMediaDialog(
                                                 OutlinedTextField(
                                                     value = episode.streamUrl,
                                                     onValueChange = { newUrl ->
-                                                        var processed = newUrl
-                                                        if (processed.contains("<iframe", ignoreCase = true) && processed.contains("src=\"", ignoreCase = true)) {
-                                                            val regex = Regex("src=\"([^\"]+)\"")
-                                                            val match = regex.find(processed)
-                                                            if (match != null) {
-                                                                processed = match.groupValues[1]
-                                                                isSeriesWebPlayer = true
-                                                            }
+                                                        val processed = newUrl
+                                                        if (processed.contains("<iframe", ignoreCase = true)) {
+                                                            isSeriesWebPlayer = true
                                                         }
                                                         val updatedEps = currentSeason.episodes.toMutableList()
                                                         updatedEps[epIdx] = episode.copy(streamUrl = processed)

@@ -1,0 +1,2441 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FutePlayer • Painel Web do Administrador</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚽</text></svg>">
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- HLS.js for video test player in browser -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <!-- Firebase JS SDK (Compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    :root {
+      --bg-dark: #0b0f19;
+      --bg-card: #111827;
+      --bg-card-hover: #172033;
+      --bg-input: #1e293b;
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-active: rgba(0, 230, 118, 0.4);
+      --primary: #00e676;
+      --primary-hover: #00c853;
+      --cyan: #00e5ff;
+      --gold: #ffb300;
+      --red: #ff1744;
+      --text-white: #ffffff;
+      --text-muted: #94a3b8;
+      --text-sub: #64748b;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-white);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* HEADER */
+    header {
+      background: rgba(17, 24, 39, 0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-color);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 14px 24px;
+    }
+
+    .header-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, rgba(0, 230, 118, 0.2), rgba(0, 229, 255, 0.2));
+      border: 1px solid var(--primary);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+
+    .logo-text h1 {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo-text h1 span {
+      color: var(--primary);
+    }
+
+    .logo-text p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .badge-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(0, 230, 118, 0.1);
+      color: var(--primary);
+      border: 1px solid rgba(0, 230, 118, 0.3);
+    }
+
+    .badge-status.offline {
+      background: rgba(255, 23, 68, 0.1);
+      color: var(--red);
+      border-color: rgba(255, 23, 68, 0.3);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 8px var(--primary);
+    }
+
+    .status-dot.offline {
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* BUTTONS */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: 1px solid transparent;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #0b0f19;
+      border-color: var(--primary);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      box-shadow: 0 0 16px rgba(0, 230, 118, 0.35);
+      transform: translateY(-1px);
+    }
+
+    .btn-cyan {
+      background: rgba(0, 229, 255, 0.15);
+      color: var(--cyan);
+      border-color: rgba(0, 229, 255, 0.4);
+    }
+
+    .btn-cyan:hover {
+      background: rgba(0, 229, 255, 0.25);
+      box-shadow: 0 0 16px rgba(0, 229, 255, 0.3);
+    }
+
+    .btn-secondary {
+      background: var(--bg-input);
+      color: var(--text-white);
+      border-color: var(--border-color);
+    }
+
+    .btn-secondary:hover {
+      background: #283548;
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-danger {
+      background: rgba(255, 23, 68, 0.15);
+      color: #ff5252;
+      border-color: rgba(255, 23, 68, 0.4);
+    }
+
+    .btn-danger:hover {
+      background: rgba(255, 23, 68, 0.25);
+    }
+
+    .btn-sm {
+      padding: 6px 10px;
+      font-size: 12px;
+      border-radius: 6px;
+    }
+
+    /* STATS BAR */
+    .stats-bar {
+      max-width: 1400px;
+      margin: 20px auto 0;
+      padding: 0 24px;
+      width: 100%;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .stat-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+    }
+
+    .stat-icon.green { background: rgba(0, 230, 118, 0.15); color: var(--primary); }
+    .stat-icon.cyan { background: rgba(0, 229, 255, 0.15); color: var(--cyan); }
+    .stat-icon.gold { background: rgba(255, 179, 0, 0.15); color: var(--gold); }
+    .stat-icon.purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+
+    .stat-info .stat-value {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--text-white);
+    }
+
+    .stat-info .stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+
+    /* NAVIGATION TABS */
+    .nav-tabs {
+      max-width: 1400px;
+      margin: 20px auto 0;
+      padding: 0 24px;
+      width: 100%;
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border-color);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .nav-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .nav-tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      background: transparent;
+      color: var(--text-muted);
+      border: none;
+      border-bottom: 2px solid transparent;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .nav-tab:hover {
+      color: var(--text-white);
+    }
+
+    .nav-tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+      background: linear-gradient(180deg, transparent, rgba(0, 230, 118, 0.05));
+    }
+
+    .nav-tab .tab-badge {
+      background: var(--bg-input);
+      color: var(--text-white);
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+    }
+
+    .nav-tab.active .tab-badge {
+      background: rgba(0, 230, 118, 0.2);
+      color: var(--primary);
+    }
+
+    /* MAIN CONTENT */
+    main {
+      max-width: 1400px;
+      margin: 24px auto 60px;
+      padding: 0 24px;
+      width: 100%;
+      flex: 1;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* TOOLBAR (SEARCH + ACTIONS) */
+    .content-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .search-filter-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      min-width: 280px;
+    }
+
+    .search-input-wrapper {
+      position: relative;
+      flex: 1;
+    }
+
+    .search-input-wrapper input {
+      width: 100%;
+      padding: 10px 14px 10px 38px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      color: var(--text-white);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-input-wrapper input:focus {
+      border-color: var(--primary);
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-sub);
+      pointer-events: none;
+    }
+
+    select.select-filter {
+      padding: 10px 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      color: var(--text-white);
+      font-size: 13px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    select.select-filter:focus {
+      border-color: var(--primary);
+    }
+
+    /* GRID / LIST STYLES */
+    .items-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+      gap: 16px;
+    }
+
+    /* CHANNEL CARD */
+    .channel-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: var(--shadow);
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .channel-card:hover {
+      border-color: rgba(0, 230, 118, 0.3);
+      transform: translateY(-2px);
+      box-shadow: 0 12px 28px -5px rgba(0, 0, 0, 0.6);
+    }
+
+    .channel-card.offline {
+      border-color: rgba(255, 23, 68, 0.3);
+      opacity: 0.85;
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .channel-logo {
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      background: #1e293b;
+      object-fit: cover;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      color: var(--text-muted);
+      border: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .channel-details {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .channel-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-white);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .channel-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tag-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+
+    .pill-tag {
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-muted);
+    }
+
+    .pill-tag.category {
+      background: rgba(0, 229, 255, 0.12);
+      color: var(--cyan);
+    }
+
+    .pill-tag.status-ok {
+      background: rgba(0, 230, 118, 0.12);
+      color: var(--primary);
+    }
+
+    .pill-tag.status-off {
+      background: rgba(255, 23, 68, 0.12);
+      color: var(--red);
+    }
+
+    .channel-url-preview {
+      font-size: 11px;
+      color: var(--text-sub);
+      background: rgba(0, 0, 0, 0.25);
+      padding: 6px 8px;
+      border-radius: 6px;
+      word-break: break-all;
+      max-height: 44px;
+      overflow: hidden;
+      line-height: 1.3;
+    }
+
+    .card-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      margin-top: auto;
+    }
+
+    /* MEDIA CARD (MOVIE & SERIES) */
+    .media-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: var(--shadow);
+      transition: all 0.2s ease;
+    }
+
+    .media-card:hover {
+      border-color: rgba(0, 229, 255, 0.4);
+      transform: translateY(-3px);
+    }
+
+    .media-poster-box {
+      width: 100%;
+      height: 200px;
+      background: #1e293b;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .media-poster-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.3s ease;
+    }
+
+    .media-card:hover .media-poster-box img {
+      transform: scale(1.05);
+    }
+
+    .media-type-badge {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+    }
+
+    .media-type-badge.movie {
+      color: var(--cyan);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+    }
+
+    .media-type-badge.series {
+      color: var(--gold);
+      border: 1px solid rgba(255, 179, 0, 0.4);
+    }
+
+    .media-rating {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--gold);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .media-body {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+    }
+
+    .media-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-white);
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .media-meta-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .media-synopsis {
+      font-size: 12px;
+      color: var(--text-sub);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.4;
+    }
+
+    /* EMPTY STATE */
+    .empty-state {
+      background: var(--bg-card);
+      border: 1px dashed var(--border-color);
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-icon {
+      font-size: 42px;
+      margin-bottom: 12px;
+      opacity: 0.6;
+    }
+
+    .empty-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-white);
+      margin-bottom: 6px;
+    }
+
+    /* MODAL */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(6px);
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      max-width: 680px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: var(--shadow);
+      animation: modalZoom 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes modalZoom {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .modal-header {
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      background: var(--bg-card);
+      z-index: 10;
+    }
+
+    .modal-header h3 {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-white);
+    }
+
+    .modal-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 22px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px;
+    }
+
+    .modal-close:hover {
+      color: var(--text-white);
+    }
+
+    .modal-body {
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-group label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      padding: 10px 14px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      color: var(--text-white);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      border-color: var(--primary);
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .form-check {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .form-check input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+
+    .modal-footer {
+      padding: 16px 22px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      background: var(--bg-card);
+      position: sticky;
+      bottom: 0;
+      z-index: 10;
+    }
+
+    /* EPISODES BUILDER FOR SERIES */
+    .seasons-container {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      margin-top: 10px;
+    }
+
+    .season-block {
+      background: #172033;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .season-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .season-head h4 {
+      font-size: 14px;
+      color: var(--gold);
+      font-weight: 700;
+    }
+
+    .episode-item-row {
+      display: grid;
+      grid-template-columns: 60px 1fr 2fr 40px;
+      gap: 8px;
+      align-items: center;
+      background: var(--bg-input);
+      padding: 8px 10px;
+      border-radius: 6px;
+    }
+
+    .episode-item-row input {
+      padding: 6px 8px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-white);
+      font-size: 12px;
+    }
+
+    /* VIDEO TEST PLAYER MODAL */
+    .video-player-container {
+      width: 100%;
+      height: 380px;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .video-player-container video {
+      width: 100%;
+      height: 100%;
+      background: #000;
+    }
+
+    .video-player-container iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    /* TOAST */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .toast {
+      padding: 12px 18px;
+      border-radius: var(--radius-sm);
+      background: #1e293b;
+      color: var(--text-white);
+      border: 1px solid var(--border-color);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: toastIn 0.3s ease-out;
+    }
+
+    .toast.success {
+      border-color: var(--primary);
+      background: #064e3b;
+      color: #6ee7b7;
+    }
+
+    .toast.error {
+      border-color: var(--red);
+      background: #7f1d1d;
+      color: #fca5a5;
+    }
+
+    @keyframes toastIn {
+      from { transform: translateX(50px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    @media (max-width: 768px) {
+      .header-container { flex-direction: column; align-items: stretch; }
+      .header-actions { justify-content: flex-start; }
+      .form-row { grid-template-columns: 1fr; }
+      .episode-item-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="header-container">
+      <div class="logo-area">
+        <div class="logo-icon">⚽</div>
+        <div class="logo-text">
+          <h1>FutePlayer <span>Painel Web</span></h1>
+          <p>Gerenciamento em tempo real • Conectado ao Firebase Firestore</p>
+        </div>
+      </div>
+
+      <div class="badge-status" id="firestoreStatusBadge">
+        <div class="status-dot" id="firestoreDot"></div>
+        <span id="firestoreStatusText">Conectando ao Firestore...</span>
+      </div>
+
+      <div class="header-actions">
+        <button class="btn btn-secondary btn-sm" onclick="exportDataJson()" title="Exportar Backup">
+          📥 Backup JSON
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importFileInput').click()" title="Importar Backup">
+          📤 Importar JSON
+        </button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="importDataJson(event)">
+        <button class="btn btn-cyan btn-sm" onclick="reloadDataFromFirebase()">
+          🔄 Atualizar
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- STATS BAR -->
+  <section class="stats-bar">
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon green">📺</div>
+        <div class="stat-info">
+          <div class="stat-value" id="countChannels">0</div>
+          <div class="stat-label">Canais Rápidos</div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon cyan">🎬</div>
+        <div class="stat-info">
+          <div class="stat-value" id="countMovies">0</div>
+          <div class="stat-label">Filmes Cadastrados</div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon gold">🍿</div>
+        <div class="stat-info">
+          <div class="stat-value" id="countSeries">0</div>
+          <div class="stat-label">Séries & Animes</div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon purple">⚡</div>
+        <div class="stat-info">
+          <div class="stat-value" id="syncStatusSummary">Tempo Real</div>
+          <div class="stat-label">Sincronização com App</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NAVIGATION TABS -->
+  <nav class="nav-tabs">
+    <button class="nav-tab active" onclick="switchTab('channels')">
+      📺 Canais Rápidos <span class="tab-badge" id="badgeTabChannels">0</span>
+    </button>
+    <button class="nav-tab" onclick="switchTab('movies')">
+      🎬 Filmes <span class="tab-badge" id="badgeTabMovies">0</span>
+    </button>
+    <button class="nav-tab" onclick="switchTab('series')">
+      🍿 Séries <span class="tab-badge" id="badgeTabSeries">0</span>
+    </button>
+    <button class="nav-tab" onclick="switchTab('settings')">
+      ⚙️ Configurações & Sincronização
+    </button>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main>
+    <!-- TAB 1: CANAIS RÁPIDOS -->
+    <section id="tab-channels" class="tab-content active">
+      <div class="content-toolbar">
+        <div class="search-filter-group">
+          <div class="search-input-wrapper">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="searchChannelsInput" placeholder="Buscar canais por nome..." oninput="renderChannels()">
+          </div>
+          <select id="filterChannelsCategory" class="select-filter" onchange="renderChannels()">
+            <option value="ALL">Todas as Categorias</option>
+          </select>
+        </div>
+
+        <button class="btn btn-primary" onclick="openChannelModal()">
+          ➕ Adicionar Canal
+        </button>
+      </div>
+
+      <div class="items-grid" id="channelsGrid">
+        <!-- Injetado dinamicamente -->
+      </div>
+    </section>
+
+    <!-- TAB 2: FILMES -->
+    <section id="tab-movies" class="tab-content">
+      <div class="content-toolbar">
+        <div class="search-filter-group">
+          <div class="search-input-wrapper">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="searchMoviesInput" placeholder="Buscar filmes por título..." oninput="renderMovies()">
+          </div>
+          <select id="filterMoviesGenre" class="select-filter" onchange="renderMovies()">
+            <option value="ALL">Todos os Gêneros</option>
+          </select>
+        </div>
+
+        <button class="btn btn-cyan" onclick="openMovieModal()">
+          ➕ Adicionar Filme
+        </button>
+      </div>
+
+      <div class="items-grid" id="moviesGrid">
+        <!-- Injetado dinamicamente -->
+      </div>
+    </section>
+
+    <!-- TAB 3: SÉRIES -->
+    <section id="tab-series" class="tab-content">
+      <div class="content-toolbar">
+        <div class="search-filter-group">
+          <div class="search-input-wrapper">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="searchSeriesInput" placeholder="Buscar séries por título..." oninput="renderSeries()">
+          </div>
+          <select id="filterSeriesGenre" class="select-filter" onchange="renderSeries()">
+            <option value="ALL">Todos os Gêneros</option>
+          </select>
+        </div>
+
+        <button class="btn btn-primary" onclick="openSeriesModal()">
+          ➕ Adicionar Série
+        </button>
+      </div>
+
+      <div class="items-grid" id="seriesGrid">
+        <!-- Injetado dinamicamente -->
+      </div>
+    </section>
+
+    <!-- TAB 4: CONFIGURAÇÕES & SINCRONIZAÇÃO -->
+    <section id="tab-settings" class="tab-content">
+      <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius); padding: 24px; max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px;">
+        <h2 style="font-size: 18px; font-weight: 700; color: var(--text-white); display: flex; align-items: center; gap: 10px;">
+          <span>⚙️</span> Informações de Conexão com o App FutePlayer
+        </h2>
+
+        <p style="font-size: 14px; color: var(--text-muted); line-height: 1.6;">
+          Este Painel Web está conectado diretamente ao banco de dados <strong>Firebase Firestore (Projeto futeplayer-2b630)</strong>.
+          O aplicativo Android possui um ouvinte em tempo real (<code style="background: var(--bg-input); padding: 2px 6px; border-radius: 4px; color: var(--primary);">SnapshotListener</code>) nas coleções <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 4px; color: var(--cyan);">app_data/channels</code> e <code style="background: var(--bg-input); padding: 2px 6px; border-radius: 4px; color: var(--gold);">app_data/media_catalog</code>.
+        </p>
+
+        <div style="background: var(--bg-input); border-left: 4px solid var(--primary); padding: 14px 18px; border-radius: 6px;">
+          <h4 style="font-size: 14px; color: var(--primary); margin-bottom: 4px;">🚀 Atualização Instantânea</h4>
+          <p style="font-size: 13px; color: var(--text-muted);">
+            Assim que você clica em <strong>"Salvar"</strong> nesta página, o canal, filme ou série adicionado é enviado ao Firestore e <strong>aparece imediatamente na tela do aplicativo</strong> para todos os usuários, sem necessidade de atualizar ou reiniciar o aplicativo!
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label>URL Deste Painel Web (Para Acesso Externo)</label>
+          <div style="display: flex; gap: 10px;">
+            <input type="text" id="panelCurrentUrl" readonly style="flex: 1;" value="https://futeplayer-2b630.web.app">
+            <button class="btn btn-secondary" onclick="copyPanelUrl()">Copiar Link</button>
+          </div>
+          <small style="color: var(--text-sub); font-size: 12px; margin-top: 4px;">
+            Você pode abrir este link em qualquer navegador pelo computador, tablet ou celular.
+          </small>
+        </div>
+
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px;">
+          <button class="btn btn-primary" onclick="forceSaveAllToFirestore()">
+            💾 Sincronizar Tudo Manualmente com o Firestore
+          </button>
+          <button class="btn btn-cyan" onclick="exportDataJson()">
+            📥 Baixar Backup Geral (JSON)
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODAL: ADICIONAR / EDITAR CANAL -->
+  <div class="modal-overlay" id="modalChannel">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modalChannelTitle">➕ Adicionar Canal Rápido</h3>
+        <button class="modal-close" onclick="closeChannelModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="channelEditId">
+
+        <div class="form-group">
+          <label>Nome do Canal *</label>
+          <input type="text" id="channelName" placeholder="Ex: ESPN 4 HD, SporTV, Premiere 1">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Categoria</label>
+            <input type="text" id="channelCategory" placeholder="Ex: Esportes, Abertos, Filmes, Notícias" list="categorySuggestions">
+            <datalist id="categorySuggestions">
+              <option value="Esportes">
+              <option value="Abertos">
+              <option value="Filmes & Séries">
+              <option value="Notícias">
+              <option value="Infantil">
+              <option value="Documentários">
+            </datalist>
+          </div>
+
+          <div class="form-group">
+            <label>Subtítulo / Descrição</label>
+            <input type="text" id="channelSubtitle" placeholder="Ex: 1080p 60 FPS • Ao Vivo">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>URL do Stream / Link M3U8 ou Código Iframe *</label>
+          <textarea id="channelStreamUrl" rows="3" placeholder="https://exemplo.com/stream.m3u8 ou <iframe src=...>"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>URL da Logo / Ícone (Opcional)</label>
+          <input type="text" id="channelLogoUrl" placeholder="https://exemplo.com/logo.png">
+        </div>
+
+        <div class="form-row" style="margin-top: 6px;">
+          <label class="form-check">
+            <input type="checkbox" id="channelIsWorking" checked>
+            <span>Canal No Ar (Funcionando)</span>
+          </label>
+
+          <label class="form-check">
+            <input type="checkbox" id="channelForceWebPlayer">
+            <span>Usar WebPlayer / Iframe</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeChannelModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveChannel()">Salvar Canal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ADICIONAR / EDITAR FILME -->
+  <div class="modal-overlay" id="modalMovie">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modalMovieTitle">➕ Adicionar Filme</h3>
+        <button class="modal-close" onclick="closeMovieModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="movieEditId">
+
+        <div class="form-group">
+          <label>Título do Filme *</label>
+          <input type="text" id="movieTitle" placeholder="Ex: Vingadores: Ultimato">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Gênero / Categoria</label>
+            <input type="text" id="movieCategory" placeholder="Ex: Ação, Comédia, Terror, Ficção" list="genreSuggestions">
+            <datalist id="genreSuggestions">
+              <option value="Ação">
+              <option value="Comédia">
+              <option value="Drama">
+              <option value="Terror">
+              <option value="Ficção Científica">
+              <option value="Aventura">
+              <option value="Animação">
+            </datalist>
+          </div>
+
+          <div class="form-group">
+            <label>Ano de Lançamento</label>
+            <input type="text" id="movieYear" placeholder="Ex: 2024">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Nota / Avaliação</label>
+            <input type="text" id="movieRating" placeholder="Ex: 8.5">
+          </div>
+
+          <div class="form-group" style="justify-content: flex-end;">
+            <label class="form-check" style="padding-bottom: 8px;">
+              <input type="checkbox" id="movieIsWebPlayer">
+              <span>Reproduzir via Web Player</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>URL do Stream do Filme (MP4 / M3U8 / Embed) *</label>
+          <input type="text" id="movieStreamUrl" placeholder="https://exemplo.com/filme.mp4">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>URL da Capa (Poster Vertical)</label>
+            <input type="text" id="movieCoverUrl" placeholder="https://exemplo.com/poster.jpg">
+          </div>
+
+          <div class="form-group">
+            <label>URL do Banner / Fundo (Opcional)</label>
+            <input type="text" id="movieBackdropUrl" placeholder="https://exemplo.com/backdrop.jpg">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Sinopse</label>
+          <textarea id="movieSynopsis" rows="3" placeholder="Resumo do filme..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeMovieModal()">Cancelar</button>
+        <button class="btn btn-cyan" onclick="saveMovie()">Salvar Filme</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ADICIONAR / EDITAR SÉRIE -->
+  <div class="modal-overlay" id="modalSeries">
+    <div class="modal-card" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3 id="modalSeriesTitle">➕ Adicionar Série & Episódios</h3>
+        <button class="modal-close" onclick="closeSeriesModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="seriesEditId">
+
+        <div class="form-group">
+          <label>Título da Série *</label>
+          <input type="text" id="seriesTitle" placeholder="Ex: The Boys, Stranger Things, Game of Thrones">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Gênero / Categoria</label>
+            <input type="text" id="seriesCategory" placeholder="Ex: Ação, Drama, Ficção Científica" list="genreSuggestions">
+          </div>
+
+          <div class="form-group">
+            <label>Ano de Lançamento</label>
+            <input type="text" id="seriesYear" placeholder="Ex: 2024">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Nota / Avaliação</label>
+            <input type="text" id="seriesRating" placeholder="Ex: 9.0">
+          </div>
+
+          <div class="form-group">
+            <label>URL da Capa (Poster Vertical)</label>
+            <input type="text" id="seriesCoverUrl" placeholder="https://exemplo.com/poster.jpg">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Sinopse da Série</label>
+          <textarea id="seriesSynopsis" rows="2" placeholder="Resumo da série..."></textarea>
+        </div>
+
+        <!-- GERENCIADOR DE TEMPORADAS E EPISÓDIOS -->
+        <div style="border-top: 1px solid var(--border-color); padding-top: 16px; margin-top: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+            <h4 style="font-size: 15px; font-weight: 700; color: var(--gold);">🍿 Temporadas & Episódios</h4>
+            <div style="display: flex; gap: 8px;">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addSeason()">
+                ➕ Nova Temporada
+              </button>
+              <button type="button" class="btn btn-cyan btn-sm" onclick="openBulkImportEpisodesModal()">
+                ⚡ Importar em Lote
+              </button>
+            </div>
+          </div>
+
+          <div class="seasons-container" id="seasonsContainer">
+            <!-- Injetado dinamicamente -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeSeriesModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveSeries()">Salvar Série Completa</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: TEST PLAYER -->
+  <div class="modal-overlay" id="modalPlayer">
+    <div class="modal-card" style="max-width: 720px;">
+      <div class="modal-header">
+        <h3 id="modalPlayerTitle">▶️ Testar Transmissão</h3>
+        <button class="modal-close" onclick="closePlayerModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="video-player-container" id="playerContainer">
+          <!-- Video ou Iframe inserido aqui -->
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted); word-break: break-all;" id="playerUrlDisplay"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closePlayerModal()">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: IMPORTAR EPISÓDIOS EM LOTE -->
+  <div class="modal-overlay" id="modalBulkEpisodes">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⚡ Importação em Lote de Episódios</h3>
+        <button class="modal-close" onclick="closeBulkImportModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: var(--text-muted);">
+          Cole a lista de links dos episódios abaixo (um por linha). Eles serão adicionados automaticamente à temporada selecionada:
+        </p>
+        <div class="form-group">
+          <label>Temporada Destino</label>
+          <select id="bulkSeasonSelect" class="select-filter" style="width: 100%;">
+            <!-- Opções das temporadas atuais -->
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Lista de Links (1 link por linha)</label>
+          <textarea id="bulkEpisodesText" rows="8" placeholder="https://servidor.com/ep01.mp4&#10;https://servidor.com/ep02.mp4&#10;https://servidor.com/ep03.mp4"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeBulkImportModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="processBulkImportEpisodes()">Gerar Episódios</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- JAVASCRIPT LOGIC -->
+  <script>
+    // 1. CONFIGURAÇÃO DO FIREBASE (Projeto futeplayer-2b630)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAWT5g8OCWeP9yC-iEdDRjsidfga_0d8wA",
+      authDomain: "futeplayer-2b630.firebaseapp.com",
+      projectId: "futeplayer-2b630",
+      storageBucket: "futeplayer-2b630.firebasestorage.app",
+      messagingSenderId: "693267322742",
+      appId: "1:693267322742:web:79fddde1c1f7237bd10c57"
+    };
+
+    let db = null;
+    let isConnectedToFirestore = false;
+
+    // Estado local em memória
+    let channelsList = [];
+    let channelCategories = ["Esportes", "Abertos", "Filmes & Séries", "Notícias", "Infantil"];
+    let deletedChannelIds = [];
+    let offlineChannelIds = [];
+
+    let mediaCatalogList = [];
+    let mediaGenres = ["Ação", "Comédia", "Drama", "Terror", "Ficção Científica", "Aventura"];
+    let deletedMediaIds = [];
+
+    // Estado da edição de série
+    let currentSeriesSeasons = [];
+
+    // Inicialização da Aplicação
+    window.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("panelCurrentUrl").value = window.location.href;
+      initFirebase();
+    });
+
+    function initFirebase() {
+      try {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(firebaseConfig);
+        }
+        db = firebase.firestore();
+        updateStatusBadge(true, "Conectado ao Firebase Firestore");
+        setupFirestoreListeners();
+      } catch (err) {
+        console.error("Erro ao inicializar Firebase:", err);
+        updateStatusBadge(false, "Falha na conexão: " + err.message);
+        showToast("Erro ao conectar ao Firebase: " + err.message, "error");
+      }
+    }
+
+    function updateStatusBadge(online, text) {
+      const badge = document.getElementById("firestoreStatusBadge");
+      const dot = document.getElementById("firestoreDot");
+      const label = document.getElementById("firestoreStatusText");
+      if (online) {
+        badge.classList.remove("offline");
+        dot.classList.remove("offline");
+        label.textContent = text || "Conectado em tempo real";
+        isConnectedToFirestore = true;
+      } else {
+        badge.classList.add("offline");
+        dot.classList.add("offline");
+        label.textContent = text || "Offline";
+        isConnectedToFirestore = false;
+      }
+    }
+
+    // Ouvintes em tempo real do Firestore
+    function setupFirestoreListeners() {
+      // 1. Ouvinte de Canais (app_data/channels)
+      db.collection("app_data").doc("channels").onSnapshot((doc) => {
+        if (doc.exists) {
+          const data = doc.data();
+          if (data.custom_quick_channels) {
+            try {
+              channelsList = typeof data.custom_quick_channels === 'string'
+                ? JSON.parse(data.custom_quick_channels)
+                : data.custom_quick_channels;
+            } catch (e) {
+              console.error("Erro ao parsear custom_quick_channels", e);
+            }
+          }
+          if (data.custom_channel_categories) {
+            try {
+              const cats = typeof data.custom_channel_categories === 'string'
+                ? JSON.parse(data.custom_channel_categories)
+                : data.custom_channel_categories;
+              if (Array.isArray(cats) && cats.length) channelCategories = cats;
+            } catch (e) {}
+          }
+          if (data.deleted_channel_ids) {
+            deletedChannelIds = data.deleted_channel_ids || [];
+          }
+          if (data.offline_channel_ids) {
+            offlineChannelIds = data.offline_channel_ids || [];
+          }
+          updateChannelsUI();
+        } else {
+          // Documento inicial vazio
+          updateChannelsUI();
+        }
+      }, (err) => {
+        console.error("Erro no listener de canais:", err);
+      });
+
+      // 2. Ouvinte de Filmes & Séries (app_data/media_catalog)
+      db.collection("app_data").doc("media_catalog").onSnapshot((doc) => {
+        if (doc.exists) {
+          const data = doc.data();
+          if (data.media_catalog_json) {
+            try {
+              mediaCatalogList = typeof data.media_catalog_json === 'string'
+                ? JSON.parse(data.media_catalog_json)
+                : data.media_catalog_json;
+            } catch (e) {
+              console.error("Erro ao parsear media_catalog_json", e);
+            }
+          }
+          if (data.custom_media_genres) {
+            try {
+              const genres = typeof data.custom_media_genres === 'string'
+                ? JSON.parse(data.custom_media_genres)
+                : data.custom_media_genres;
+              if (Array.isArray(genres) && genres.length) mediaGenres = genres;
+            } catch (e) {}
+          }
+          if (data.deleted_media_ids) {
+            deletedMediaIds = data.deleted_media_ids || [];
+          }
+          updateMediaUI();
+        } else {
+          updateMediaUI();
+        }
+      }, (err) => {
+        console.error("Erro no listener de media catalog:", err);
+      });
+    }
+
+    // NAVEGAÇÃO DE TABS
+    function switchTab(tabId) {
+      document.querySelectorAll(".nav-tab").forEach(tab => tab.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+
+      const targetBtn = Array.from(document.querySelectorAll(".nav-tab")).find(b => b.getAttribute("onclick")?.includes(tabId));
+      if (targetBtn) targetBtn.classList.add("active");
+
+      const targetContent = document.getElementById("tab-" + tabId);
+      if (targetContent) targetContent.classList.add("active");
+    }
+
+    // ==========================================
+    // CANAIS: RENDERIZAÇÃO E OPERAÇÕES
+    // ==========================================
+    function updateChannelsUI() {
+      // Atualiza badges e contadores
+      document.getElementById("countChannels").textContent = channelsList.length;
+      document.getElementById("badgeTabChannels").textContent = channelsList.length;
+
+      // Atualiza dropdown de categorias
+      const catSelect = document.getElementById("filterChannelsCategory");
+      const currentVal = catSelect.value;
+      catSelect.innerHTML = `<option value="ALL">Todas as Categorias</option>`;
+      const allCats = Array.from(new Set([...channelCategories, ...channelsList.map(c => c.category || "Esportes")])).filter(Boolean);
+      allCats.forEach(cat => {
+        catSelect.innerHTML += `<option value="${escapeHtml(cat)}">${escapeHtml(cat)}</option>`;
+      });
+      catSelect.value = currentVal || "ALL";
+
+      renderChannels();
+    }
+
+    function renderChannels() {
+      const grid = document.getElementById("channelsGrid");
+      const query = (document.getElementById("searchChannelsInput")?.value || "").toLowerCase().trim();
+      const catFilter = document.getElementById("filterChannelsCategory")?.value || "ALL";
+
+      const filtered = channelsList.filter(ch => {
+        const matchesQuery = !query ||
+          (ch.title || "").toLowerCase().includes(query) ||
+          (ch.subtitle || "").toLowerCase().includes(query) ||
+          (ch.category || "").toLowerCase().includes(query);
+        const matchesCat = catFilter === "ALL" || ch.category === catFilter;
+        return matchesQuery && matchesCat;
+      });
+
+      if (!filtered.length) {
+        grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <div class="empty-icon">📺</div>
+            <div class="empty-title">Nenhum canal encontrado</div>
+            <p>Clique no botão "+ Adicionar Canal" para cadastrar seu primeiro canal.</p>
+          </div>
+        `;
+        return;
+      }
+
+      grid.innerHTML = filtered.map(ch => {
+        const isOff = ch.isWorking === false || offlineChannelIds.includes(ch.id);
+        const logo = ch.posterUrl
+          ? `<img src="${escapeHtml(ch.posterUrl)}" class="channel-logo" onerror="this.onerror=null;this.innerHTML='📺';this.src=''">`
+          : `<div class="channel-logo">📺</div>`;
+
+        return `
+          <div class="channel-card ${isOff ? 'offline' : ''}">
+            <div class="card-top">
+              ${logo}
+              <div class="channel-details">
+                <div class="channel-title" title="${escapeHtml(ch.title)}">${escapeHtml(ch.title)}</div>
+                <div class="channel-subtitle">${escapeHtml(ch.subtitle || 'Canal de TV')}</div>
+                <div class="tag-row">
+                  <span class="pill-tag category">${escapeHtml(ch.category || 'Geral')}</span>
+                  <span class="pill-tag ${isOff ? 'status-off' : 'status-ok'}" style="cursor:pointer;" onclick="toggleChannelStatus('${ch.id}')" title="Clique para alternar status">
+                    ${isOff ? '🔴 Fora do Ar' : '🟢 No Ar'}
+                  </span>
+                  ${ch.forceWebPlayer || ch.isIframe ? '<span class="pill-tag" style="color:var(--gold);">Web</span>' : ''}
+                </div>
+              </div>
+            </div>
+
+            <div class="channel-url-preview" title="${escapeHtml(ch.streamUrl || '')}">
+              ${escapeHtml(ch.streamUrl || '')}
+            </div>
+
+            <div class="card-actions">
+              <button class="btn btn-secondary btn-sm" onclick="testPlayback('${escapeHtml(ch.title)}', '${encodeURIComponent(ch.streamUrl || '')}', ${ch.forceWebPlayer || ch.isIframe})">
+                ▶️ Testar
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="editChannel('${ch.id}')">
+                ✏️ Editar
+              </button>
+              <button class="btn btn-danger btn-sm" onclick="deleteChannel('${ch.id}')">
+                🗑️
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function openChannelModal(channel = null) {
+      document.getElementById("channelEditId").value = channel ? channel.id : "";
+      document.getElementById("modalChannelTitle").textContent = channel ? "✏️ Editar Canal" : "➕ Adicionar Canal Rápido";
+      document.getElementById("channelName").value = channel ? channel.title : "";
+      document.getElementById("channelCategory").value = channel ? (channel.category || "Esportes") : "Esportes";
+      document.getElementById("channelSubtitle").value = channel ? (channel.subtitle || "") : "";
+      document.getElementById("channelStreamUrl").value = channel ? (channel.streamUrl || "") : "";
+      document.getElementById("channelLogoUrl").value = channel ? (channel.posterUrl || "") : "";
+      document.getElementById("channelIsWorking").checked = channel ? (channel.isWorking !== false) : true;
+      document.getElementById("channelForceWebPlayer").checked = channel ? (channel.forceWebPlayer || channel.isIframe || false) : false;
+
+      document.getElementById("modalChannel").classList.add("active");
+    }
+
+    function closeChannelModal() {
+      document.getElementById("modalChannel").classList.remove("active");
+    }
+
+    function editChannel(id) {
+      const channel = channelsList.find(c => c.id === id);
+      if (channel) openChannelModal(channel);
+    }
+
+    async function saveChannel() {
+      const id = document.getElementById("channelEditId").value || ("custom_" + Date.now());
+      const title = document.getElementById("channelName").value.trim();
+      const category = document.getElementById("channelCategory").value.trim() || "Esportes";
+      const subtitle = document.getElementById("channelSubtitle").value.trim() || "Canal • FutePlayer";
+      const streamUrl = document.getElementById("channelStreamUrl").value.trim();
+      const posterUrl = document.getElementById("channelLogoUrl").value.trim();
+      const isWorking = document.getElementById("channelIsWorking").checked;
+      const forceWebPlayer = document.getElementById("channelForceWebPlayer").checked;
+      const isIframe = streamUrl.includes("<iframe") || forceWebPlayer;
+
+      if (!title || !streamUrl) {
+        showToast("Preencha o Nome e a URL do Stream!", "error");
+        return;
+      }
+
+      const newChannel = {
+        id,
+        title,
+        subtitle,
+        streamUrl,
+        posterUrl: posterUrl || null,
+        category,
+        isWorking,
+        forceWebPlayer,
+        isIframe,
+        isLive: true,
+        embedUrl: isIframe ? streamUrl : null
+      };
+
+      const existingIndex = channelsList.findIndex(c => c.id === id);
+      if (existingIndex >= 0) {
+        channelsList[existingIndex] = newChannel;
+      } else {
+        channelsList.push(newChannel);
+      }
+
+      // Adiciona categoria se nova
+      if (!channelCategories.includes(category)) {
+        channelCategories.push(category);
+      }
+
+      closeChannelModal();
+      await syncChannelsToFirestore();
+      showToast(`Canal "${title}" salvo com sucesso!`, "success");
+    }
+
+    async function toggleChannelStatus(id) {
+      const channel = channelsList.find(c => c.id === id);
+      if (!channel) return;
+      channel.isWorking = !channel.isWorking;
+      if (channel.isWorking) {
+        offlineChannelIds = offlineChannelIds.filter(x => x !== id);
+      } else {
+        if (!offlineChannelIds.includes(id)) offlineChannelIds.push(id);
+      }
+      renderChannels();
+      await syncChannelsToFirestore();
+      showToast(`Canal "${channel.title}" agora está ${channel.isWorking ? '🟢 No Ar' : '🔴 Fora do Ar'}`, "success");
+    }
+
+    async function deleteChannel(id) {
+      const channel = channelsList.find(c => c.id === id);
+      const name = channel ? channel.title : "Canal";
+      if (!confirm(`Deseja realmente excluir o canal "${name}"?`)) return;
+
+      channelsList = channelsList.filter(c => c.id !== id);
+      if (!deletedChannelIds.includes(id)) deletedChannelIds.push(id);
+
+      renderChannels();
+      await syncChannelsToFirestore();
+      showToast(`Canal "${name}" removido com sucesso!`, "success");
+    }
+
+    async function syncChannelsToFirestore() {
+      if (!db) return;
+      try {
+        await db.collection("app_data").doc("channels").set({
+          custom_quick_channels: JSON.stringify(channelsList),
+          custom_channel_categories: JSON.stringify(channelCategories),
+          deleted_channel_ids: deletedChannelIds,
+          offline_channel_ids: offlineChannelIds,
+          last_updated: Date.now()
+        }, { merge: true });
+        console.log("Canais sincronizados com o Firestore.");
+      } catch (err) {
+        console.error("Erro ao salvar canais no Firestore:", err);
+        showToast("Erro ao sincronizar canais: " + err.message, "error");
+      }
+    }
+
+    // ==========================================
+    // FILMES & SÉRIES: RENDERIZAÇÃO E OPERAÇÕES
+    // ==========================================
+    function updateMediaUI() {
+      const movies = mediaCatalogList.filter(m => m.type === "MOVIE");
+      const series = mediaCatalogList.filter(m => m.type === "SERIES");
+
+      document.getElementById("countMovies").textContent = movies.length;
+      document.getElementById("badgeTabMovies").textContent = movies.length;
+
+      document.getElementById("countSeries").textContent = series.length;
+      document.getElementById("badgeTabSeries").textContent = series.length;
+
+      // Dropdown de gêneros
+      const allGenres = Array.from(new Set([...mediaGenres, ...mediaCatalogList.map(m => m.category || "Geral")])).filter(Boolean);
+
+      const movieSelect = document.getElementById("filterMoviesGenre");
+      const currentMovieGenre = movieSelect.value;
+      movieSelect.innerHTML = `<option value="ALL">Todos os Gêneros</option>`;
+      allGenres.forEach(g => {
+        movieSelect.innerHTML += `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`;
+      });
+      movieSelect.value = currentMovieGenre || "ALL";
+
+      const seriesSelect = document.getElementById("filterSeriesGenre");
+      const currentSeriesGenre = seriesSelect.value;
+      seriesSelect.innerHTML = `<option value="ALL">Todos os Gêneros</option>`;
+      allGenres.forEach(g => {
+        seriesSelect.innerHTML += `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`;
+      });
+      seriesSelect.value = currentSeriesGenre || "ALL";
+
+      renderMovies();
+      renderSeries();
+    }
+
+    function renderMovies() {
+      const grid = document.getElementById("moviesGrid");
+      const query = (document.getElementById("searchMoviesInput")?.value || "").toLowerCase().trim();
+      const genre = document.getElementById("filterMoviesGenre")?.value || "ALL";
+
+      const movies = mediaCatalogList.filter(m => m.type === "MOVIE").filter(m => {
+        const matchesQuery = !query ||
+          (m.title || "").toLowerCase().includes(query) ||
+          (m.category || "").toLowerCase().includes(query) ||
+          (m.synopsis || "").toLowerCase().includes(query);
+        const matchesGenre = genre === "ALL" || m.category === genre;
+        return matchesQuery && matchesGenre;
+      });
+
+      if (!movies.length) {
+        grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <div class="empty-icon">🎬</div>
+            <div class="empty-title">Nenhum filme cadastrado</div>
+            <p>Clique em "+ Adicionar Filme" para cadastrar títulos que aparecerão no aplicativo.</p>
+          </div>
+        `;
+        return;
+      }
+
+      grid.innerHTML = movies.map(m => {
+        const poster = m.coverUrl || m.backdropUrl;
+        return `
+          <div class="media-card">
+            <div class="media-poster-box">
+              ${poster ? `<img src="${escapeHtml(poster)}" onerror="this.onerror=null;this.src=''">` : ''}
+              <div class="media-type-badge movie">FILME</div>
+              ${m.rating ? `<div class="media-rating">★ ${escapeHtml(m.rating)}</div>` : ''}
+            </div>
+
+            <div class="media-body">
+              <div class="media-title" title="${escapeHtml(m.title)}">${escapeHtml(m.title)}</div>
+              <div class="media-meta-line">
+                <span>${escapeHtml(m.year || '2024')}</span>
+                <span>•</span>
+                <span class="pill-tag category">${escapeHtml(m.category || 'Geral')}</span>
+              </div>
+              <div class="media-synopsis">${escapeHtml(m.synopsis || 'Sem sinopse cadastrada.')}</div>
+
+              <div class="card-actions" style="margin-top:auto;">
+                <button class="btn btn-secondary btn-sm" onclick="testPlayback('${escapeHtml(m.title)}', '${encodeURIComponent(m.movieStreamUrl || '')}', ${m.isWebPlayer || false})">
+                  ▶️ Testar
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="editMovie('${m.id}')">
+                  ✏️ Editar
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="deleteMedia('${m.id}', 'Filme')">
+                  🗑️
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function openMovieModal(movie = null) {
+      document.getElementById("movieEditId").value = movie ? movie.id : "";
+      document.getElementById("modalMovieTitle").textContent = movie ? "✏️ Editar Filme" : "➕ Adicionar Filme";
+      document.getElementById("movieTitle").value = movie ? movie.title : "";
+      document.getElementById("movieCategory").value = movie ? (movie.category || "Ação") : "Ação";
+      document.getElementById("movieYear").value = movie ? (movie.year || "") : "2024";
+      document.getElementById("movieRating").value = movie ? (movie.rating || "") : "8.0";
+      document.getElementById("movieIsWebPlayer").checked = movie ? (movie.isWebPlayer || false) : false;
+      document.getElementById("movieStreamUrl").value = movie ? (movie.movieStreamUrl || "") : "";
+      document.getElementById("movieCoverUrl").value = movie ? (movie.coverUrl || "") : "";
+      document.getElementById("movieBackdropUrl").value = movie ? (movie.backdropUrl || "") : "";
+      document.getElementById("movieSynopsis").value = movie ? (movie.synopsis || "") : "";
+
+      document.getElementById("modalMovie").classList.add("active");
+    }
+
+    function closeMovieModal() {
+      document.getElementById("modalMovie").classList.remove("active");
+    }
+
+    function editMovie(id) {
+      const movie = mediaCatalogList.find(m => m.id === id);
+      if (movie) openMovieModal(movie);
+    }
+
+    async function saveMovie() {
+      const id = document.getElementById("movieEditId").value || ("movie_" + Date.now());
+      const title = document.getElementById("movieTitle").value.trim();
+      const category = document.getElementById("movieCategory").value.trim() || "Ação";
+      const year = document.getElementById("movieYear").value.trim() || "2024";
+      const rating = document.getElementById("movieRating").value.trim() || "8.0";
+      const isWebPlayer = document.getElementById("movieIsWebPlayer").checked;
+      const movieStreamUrl = document.getElementById("movieStreamUrl").value.trim();
+      const coverUrl = document.getElementById("movieCoverUrl").value.trim();
+      const backdropUrl = document.getElementById("movieBackdropUrl").value.trim();
+      const synopsis = document.getElementById("movieSynopsis").value.trim();
+
+      if (!title || !movieStreamUrl) {
+        showToast("Preencha o Título e a URL do Stream do Filme!", "error");
+        return;
+      }
+
+      const item = {
+        id,
+        title,
+        type: "MOVIE",
+        category,
+        year,
+        rating,
+        isWebPlayer,
+        movieStreamUrl,
+        coverUrl: coverUrl || backdropUrl || "",
+        backdropUrl: backdropUrl || coverUrl || "",
+        synopsis,
+        seasons: [],
+        isWorking: true,
+        createdAt: Date.now()
+      };
+
+      const existingIndex = mediaCatalogList.findIndex(m => m.id === id);
+      if (existingIndex >= 0) {
+        mediaCatalogList[existingIndex] = item;
+      } else {
+        mediaCatalogList.push(item);
+      }
+
+      if (!mediaGenres.includes(category)) mediaGenres.push(category);
+
+      closeMovieModal();
+      await syncMediaToFirestore();
+      showToast(`Filme "${title}" salvo com sucesso!`, "success");
+    }
+
+    // ==========================================
+    // SÉRIES: RENDERIZAÇÃO E OPERAÇÕES
+    // ==========================================
+    function renderSeries() {
+      const grid = document.getElementById("seriesGrid");
+      const query = (document.getElementById("searchSeriesInput")?.value || "").toLowerCase().trim();
+      const genre = document.getElementById("filterSeriesGenre")?.value || "ALL";
+
+      const series = mediaCatalogList.filter(m => m.type === "SERIES").filter(m => {
+        const matchesQuery = !query ||
+          (m.title || "").toLowerCase().includes(query) ||
+          (m.category || "").toLowerCase().includes(query) ||
+          (m.synopsis || "").toLowerCase().includes(query);
+        const matchesGenre = genre === "ALL" || m.category === genre;
+        return matchesQuery && matchesGenre;
+      });
+
+      if (!series.length) {
+        grid.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1;">
+            <div class="empty-icon">🍿</div>
+            <div class="empty-title">Nenhuma série cadastrada</div>
+            <p>Clique em "+ Adicionar Série" para cadastrar temporadas e episódios.</p>
+          </div>
+        `;
+        return;
+      }
+
+      grid.innerHTML = series.map(s => {
+        const poster = s.coverUrl || s.backdropUrl;
+        const totalSeasons = (s.seasons || []).length;
+        const totalEpisodes = (s.seasons || []).reduce((acc, season) => acc + (season.episodes || []).length, 0);
+
+        return `
+          <div class="media-card">
+            <div class="media-poster-box">
+              ${poster ? `<img src="${escapeHtml(poster)}" onerror="this.onerror=null;this.src=''">` : ''}
+              <div class="media-type-badge series">SÉRIE</div>
+              ${s.rating ? `<div class="media-rating">★ ${escapeHtml(s.rating)}</div>` : ''}
+            </div>
+
+            <div class="media-body">
+              <div class="media-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>
+              <div class="media-meta-line">
+                <span>${escapeHtml(s.year || '2024')}</span>
+                <span>•</span>
+                <span class="pill-tag category">${escapeHtml(s.category || 'Série')}</span>
+                <span>•</span>
+                <span style="color:var(--gold);font-weight:600;">${totalSeasons}T / ${totalEpisodes}Eps</span>
+              </div>
+              <div class="media-synopsis">${escapeHtml(s.synopsis || 'Sem sinopse cadastrada.')}</div>
+
+              <div class="card-actions" style="margin-top:auto;">
+                <button class="btn btn-secondary btn-sm" onclick="editSeries('${s.id}')">
+                  ✏️ Editar Série & Eps
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="deleteMedia('${s.id}', 'Série')">
+                  🗑️
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function openSeriesModal(series = null) {
+      document.getElementById("seriesEditId").value = series ? series.id : "";
+      document.getElementById("modalSeriesTitle").textContent = series ? "✏️ Editar Série" : "➕ Adicionar Série & Episódios";
+      document.getElementById("seriesTitle").value = series ? series.title : "";
+      document.getElementById("seriesCategory").value = series ? (series.category || "Drama") : "Drama";
+      document.getElementById("seriesYear").value = series ? (series.year || "") : "2024";
+      document.getElementById("seriesRating").value = series ? (series.rating || "") : "8.5";
+      document.getElementById("seriesCoverUrl").value = series ? (series.coverUrl || "") : "";
+      document.getElementById("seriesSynopsis").value = series ? (series.synopsis || "") : "";
+
+      if (series && Array.isArray(series.seasons) && series.seasons.length) {
+        currentSeriesSeasons = JSON.parse(JSON.stringify(series.seasons));
+      } else {
+        // Padrão: 1 temporada inicial com 1 episódio
+        currentSeriesSeasons = [
+          {
+            seasonNumber: 1,
+            title: "Temporada 1",
+            episodes: [
+              { id: "ep_1_1", episodeNumber: 1, title: "Episódio 1", streamUrl: "", duration: "45 min", synopsis: "" }
+            ]
+          }
+        ];
+      }
+
+      renderSeasonsEditor();
+      document.getElementById("modalSeries").classList.add("active");
+    }
+
+    function closeSeriesModal() {
+      document.getElementById("modalSeries").classList.remove("active");
+    }
+
+    function editSeries(id) {
+      const s = mediaCatalogList.find(m => m.id === id);
+      if (s) openSeriesModal(s);
+    }
+
+    function addSeason() {
+      const nextNumber = currentSeriesSeasons.length + 1;
+      currentSeriesSeasons.push({
+        seasonNumber: nextNumber,
+        title: `Temporada ${nextNumber}`,
+        episodes: [
+          { id: `ep_${nextNumber}_1`, episodeNumber: 1, title: "Episódio 1", streamUrl: "", duration: "45 min", synopsis: "" }
+        ]
+      });
+      renderSeasonsEditor();
+    }
+
+    function removeSeason(seasonIndex) {
+      if (currentSeriesSeasons.length <= 1) {
+        showToast("A série deve conter pelo menos 1 temporada!", "error");
+        return;
+      }
+      currentSeriesSeasons.splice(seasonIndex, 1);
+      renderSeasonsEditor();
+    }
+
+    function addEpisode(seasonIndex) {
+      const season = currentSeriesSeasons[seasonIndex];
+      const nextEpNumber = (season.episodes || []).length + 1;
+      season.episodes.push({
+        id: `ep_${season.seasonNumber}_${nextEpNumber}`,
+        episodeNumber: nextEpNumber,
+        title: `Episódio ${nextEpNumber}`,
+        streamUrl: "",
+        duration: "45 min",
+        synopsis: ""
+      });
+      renderSeasonsEditor();
+    }
+
+    function removeEpisode(seasonIndex, episodeIndex) {
+      const season = currentSeriesSeasons[seasonIndex];
+      if (season.episodes.length <= 1) {
+        showToast("A temporada deve ter ao menos 1 episódio!", "error");
+        return;
+      }
+      season.episodes.splice(episodeIndex, 1);
+      renderSeasonsEditor();
+    }
+
+    function renderSeasonsEditor() {
+      const container = document.getElementById("seasonsContainer");
+      if (!currentSeriesSeasons.length) {
+        container.innerHTML = `<p style="font-size:13px;color:var(--text-muted);">Nenhuma temporada configurada.</p>`;
+        return;
+      }
+
+      container.innerHTML = currentSeriesSeasons.map((season, sIdx) => {
+        return `
+          <div class="season-block">
+            <div class="season-head">
+              <h4>${escapeHtml(season.title || `Temporada ${sIdx + 1}`)} (${(season.episodes || []).length} episódios)</h4>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="addEpisode(${sIdx})">
+                  ➕ Adicionar Episódio
+                </button>
+                <button type="button" class="btn btn-danger btn-sm" onclick="removeSeason(${sIdx})" title="Excluir Temporada">
+                  🗑️
+                </button>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              ${(season.episodes || []).map((ep, eIdx) => {
+                return `
+                  <div class="episode-item-row">
+                    <input type="number" min="1" value="${ep.episodeNumber || (eIdx + 1)}" onchange="updateEpisodeField(${sIdx}, ${eIdx}, 'episodeNumber', parseInt(this.value))" title="Número do Episódio">
+                    <input type="text" value="${escapeHtml(ep.title || `Episódio ${eIdx + 1}`)}" placeholder="Título" onchange="updateEpisodeField(${sIdx}, ${eIdx}, 'title', this.value)" title="Título do Episódio">
+                    <input type="text" value="${escapeHtml(ep.streamUrl || '')}" placeholder="URL do Stream / Vídeo (M3U8 / MP4)" onchange="updateEpisodeField(${sIdx}, ${eIdx}, 'streamUrl', this.value)" title="URL do Vídeo">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="removeEpisode(${sIdx}, ${eIdx})" style="padding:4px;" title="Remover Episódio">✕</button>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function updateEpisodeField(seasonIndex, episodeIndex, field, value) {
+      if (currentSeriesSeasons[seasonIndex] && currentSeriesSeasons[seasonIndex].episodes[episodeIndex]) {
+        currentSeriesSeasons[seasonIndex].episodes[episodeIndex][field] = value;
+      }
+    }
+
+    // Importação em Lote de Episódios
+    function openBulkImportEpisodesModal() {
+      const select = document.getElementById("bulkSeasonSelect");
+      select.innerHTML = currentSeriesSeasons.map((s, idx) => `
+        <option value="${idx}">${escapeHtml(s.title || `Temporada ${idx + 1}`)}</option>
+      `).join('');
+      document.getElementById("bulkEpisodesText").value = "";
+      document.getElementById("modalBulkEpisodes").classList.add("active");
+    }
+
+    function closeBulkImportModal() {
+      document.getElementById("modalBulkEpisodes").classList.remove("active");
+    }
+
+    function processBulkImportEpisodes() {
+      const seasonIndex = parseInt(document.getElementById("bulkSeasonSelect").value);
+      const text = document.getElementById("bulkEpisodesText").value.trim();
+      if (!text) {
+        showToast("Cole ao menos um link de episódio!", "error");
+        return;
+      }
+
+      const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 5);
+      if (!lines.length) {
+        showToast("Nenhum link válido encontrado!", "error");
+        return;
+      }
+
+      const season = currentSeriesSeasons[seasonIndex];
+      const startNum = season.episodes.length + 1;
+
+      lines.forEach((url, i) => {
+        const epNum = startNum + i;
+        season.episodes.push({
+          id: `ep_${season.seasonNumber}_${epNum}`,
+          episodeNumber: epNum,
+          title: `Episódio ${epNum}`,
+          streamUrl: url,
+          duration: "45 min",
+          synopsis: ""
+        });
+      });
+
+      renderSeasonsEditor();
+      closeBulkImportModal();
+      showToast(`${lines.length} episódios importados com sucesso!`, "success");
+    }
+
+    async function saveSeries() {
+      const id = document.getElementById("seriesEditId").value || ("series_" + Date.now());
+      const title = document.getElementById("seriesTitle").value.trim();
+      const category = document.getElementById("seriesCategory").value.trim() || "Drama";
+      const year = document.getElementById("seriesYear").value.trim() || "2024";
+      const rating = document.getElementById("seriesRating").value.trim() || "8.5";
+      const coverUrl = document.getElementById("seriesCoverUrl").value.trim();
+      const synopsis = document.getElementById("seriesSynopsis").value.trim();
+
+      if (!title) {
+        showToast("Preencha o Título da Série!", "error");
+        return;
+      }
+
+      // Validação das temporadas e episódios
+      const validSeasons = currentSeriesSeasons.map((season, sIdx) => {
+        const sNum = season.seasonNumber || (sIdx + 1);
+        const validEps = (season.episodes || []).map((ep, eIdx) => ({
+          id: ep.id || `ep_${sNum}_${eIdx + 1}`,
+          episodeNumber: ep.episodeNumber || (eIdx + 1),
+          title: ep.title || `Episódio ${eIdx + 1}`,
+          streamUrl: ep.streamUrl || "",
+          duration: ep.duration || "45 min",
+          synopsis: ep.synopsis || ""
+        }));
+        return {
+          seasonNumber: sNum,
+          title: season.title || `Temporada ${sNum}`,
+          episodes: validEps
+        };
+      });
+
+      const item = {
+        id,
+        title,
+        type: "SERIES",
+        category,
+        year,
+        rating,
+        coverUrl: coverUrl || "",
+        backdropUrl: coverUrl || "",
+        synopsis,
+        seasons: validSeasons,
+        isWorking: true,
+        createdAt: Date.now()
+      };
+
+      const existingIndex = mediaCatalogList.findIndex(m => m.id === id);
+      if (existingIndex >= 0) {
+        mediaCatalogList[existingIndex] = item;
+      } else {
+        mediaCatalogList.push(item);
+      }
+
+      if (!mediaGenres.includes(category)) mediaGenres.push(category);
+
+      closeSeriesModal();
+      await syncMediaToFirestore();
+      showToast(`Série "${title}" salva com sucesso!`, "success");
+    }
+
+    async function deleteMedia(id, typeLabel = "Item") {
+      const item = mediaCatalogList.find(m => m.id === id);
+      const title = item ? item.title : typeLabel;
+      if (!confirm(`Deseja realmente excluir ${typeLabel} "${title}"?`)) return;
+
+      mediaCatalogList = mediaCatalogList.filter(m => m.id !== id);
+      if (!deletedMediaIds.includes(id)) deletedMediaIds.push(id);
+
+      updateMediaUI();
+      await syncMediaToFirestore();
+      showToast(`${typeLabel} "${title}" excluído com sucesso!`, "success");
+    }
+
+    async function syncMediaToFirestore() {
+      if (!db) return;
+      try {
+        await db.collection("app_data").doc("media_catalog").set({
+          media_catalog_json: JSON.stringify(mediaCatalogList),
+          custom_media_genres: JSON.stringify(mediaGenres),
+          deleted_media_ids: deletedMediaIds,
+          last_updated: Date.now()
+        }, { merge: true });
+        console.log("Media Catalog sincronizado com o Firestore.");
+      } catch (err) {
+        console.error("Erro ao salvar media catalog no Firestore:", err);
+        showToast("Erro ao sincronizar catálogo: " + err.message, "error");
+      }
+    }
+
+    // ==========================================
+    // REPRODUTOR DE TESTE
+    // ==========================================
+    let currentHlsInstance = null;
+
+    function testPlayback(title, streamUrlEncoded, forceWeb) {
+      const url = decodeURIComponent(streamUrlEncoded);
+      if (!url) {
+        showToast("URL da transmissão está vazia!", "error");
+        return;
+      }
+
+      document.getElementById("modalPlayerTitle").textContent = "▶️ Testando: " + title;
+      document.getElementById("playerUrlDisplay").textContent = "URL: " + url;
+      const container = document.getElementById("playerContainer");
+      container.innerHTML = "";
+
+      if (currentHlsInstance) {
+        currentHlsInstance.destroy();
+        currentHlsInstance = null;
+      }
+
+      if (forceWeb || url.includes("<iframe") || url.includes("embed") || (!url.includes(".m3u8") && !url.includes(".mp4"))) {
+        // Testar como iframe
+        const src = url.includes("<iframe") ? extractIframeSrc(url) : url;
+        container.innerHTML = `<iframe src="${escapeHtml(src)}" allowfullscreen allow="autoplay; encrypted-media"></iframe>`;
+      } else {
+        // Testar como player HTML5 / HLS.js
+        const video = document.createElement("video");
+        video.controls = true;
+        video.autoplay = true;
+        container.appendChild(video);
+
+        if (url.includes(".m3u8")) {
+          if (Hls.isSupported()) {
+            currentHlsInstance = new Hls();
+            currentHlsInstance.loadSource(url);
+            currentHlsInstance.attachMedia(video);
+            currentHlsInstance.on(Hls.Events.MANIFEST_PARSED, function () {
+              video.play().catch(e => console.log("Autoplay bloqueado pelo navegador", e));
+            });
+          } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = url;
+            video.play().catch(e => console.log(e));
+          }
+        } else {
+          video.src = url;
+          video.play().catch(e => console.log(e));
+        }
+      }
+
+      document.getElementById("modalPlayer").classList.add("active");
+    }
+
+    function extractIframeSrc(iframeHtml) {
+      const match = iframeHtml.match(/src=["']([^"']+)["']/i);
+      return match ? match[1] : iframeHtml;
+    }
+
+    function closePlayerModal() {
+      const container = document.getElementById("playerContainer");
+      container.innerHTML = "";
+      if (currentHlsInstance) {
+        currentHlsInstance.destroy();
+        currentHlsInstance = null;
+      }
+      document.getElementById("modalPlayer").classList.remove("active");
+    }
+
+    // ==========================================
+    // BACKUP, EXPORT & IMPORT
+    // ==========================================
+    function exportDataJson() {
+      const backup = {
+        version: "1.0",
+        exportedAt: new Date().toISOString(),
+        channels: channelsList,
+        categories: channelCategories,
+        mediaCatalog: mediaCatalogList,
+        mediaGenres: mediaGenres
+      };
+
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backup, null, 2));
+      const downloadAnchor = document.createElement("a");
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `futeplayer_backup_${new Date().toISOString().slice(0, 10)}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+
+      showToast("Backup baixado com sucesso!", "success");
+    }
+
+    function importDataJson(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const parsed = JSON.parse(e.target.result);
+          if (parsed.channels && Array.isArray(parsed.channels)) {
+            channelsList = parsed.channels;
+          }
+          if (parsed.categories && Array.isArray(parsed.categories)) {
+            channelCategories = parsed.categories;
+          }
+          if (parsed.mediaCatalog && Array.isArray(parsed.mediaCatalog)) {
+            mediaCatalogList = parsed.mediaCatalog;
+          }
+          if (parsed.mediaGenres && Array.isArray(parsed.mediaGenres)) {
+            mediaGenres = parsed.mediaGenres;
+          }
+
+          updateChannelsUI();
+          updateMediaUI();
+          await forceSaveAllToFirestore();
+          showToast("Dados importados e sincronizados com sucesso!", "success");
+        } catch (err) {
+          console.error("Erro ao importar JSON:", err);
+          showToast("Arquivo JSON inválido!", "error");
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = "";
+    }
+
+    async function forceSaveAllToFirestore() {
+      showToast("Sincronizando tudo com o Firestore...", "info");
+      await syncChannelsToFirestore();
+      await syncMediaToFirestore();
+      showToast("Tudo 100% salvo e sincronizado com o App!", "success");
+    }
+
+    function reloadDataFromFirebase() {
+      showToast("Recarregando dados do Firestore...", "info");
+      setupFirestoreListeners();
+    }
+
+    function copyPanelUrl() {
+      const url = document.getElementById("panelCurrentUrl").value;
+      navigator.clipboard.writeText(url).then(() => {
+        showToast("Link copiado para a área de transferência!", "success");
+      }).catch(() => {
+        showToast("Não foi possível copiar o link automaticamente.", "error");
+      });
+    }
+
+    // TOAST NOTIFICATIONS
+    function showToast(message, type = "info") {
+      const container = document.getElementById("toastContainer");
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+      toast.innerHTML = `
+        <span>${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span>
+        <span>${escapeHtml(message)}</span>
+      `;
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    function escapeHtml(str) {
+      if (typeof str !== 'string') return str;
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>

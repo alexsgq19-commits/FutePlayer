@@ -23,7 +23,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Dns
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
+import okhttp3.dnsoverhttps.DnsOverHttps
+import java.net.InetAddress
 import kotlinx.coroutines.tasks.await
 import org.jsoup.Jsoup
 import java.util.concurrent.TimeUnit
@@ -78,6 +82,7 @@ class FutemaisRepository(context: Context) {
                 val category = obj.optString("category").takeIf { it.isNotBlank() } ?: "Esportes"
                 val isWorking = obj.optBoolean("isWorking", true)
                 val isLive = obj.optBoolean("isLive", true)
+                val isIframe = obj.optBoolean("isIframe", false) || streamUrl.contains("<iframe", ignoreCase = true) || (embedUrl?.contains("<iframe", ignoreCase = true) == true)
 
                 list.add(
                     PlayableVideo(
@@ -88,9 +93,10 @@ class FutemaisRepository(context: Context) {
                         posterUrl = posterUrl,
                         isLive = isLive,
                         embedUrl = embedUrl,
-                        forceWebPlayer = isForceWeb,
+                        forceWebPlayer = isForceWeb || isIframe,
                         category = category,
-                        isWorking = isWorking
+                        isWorking = isWorking,
+                        isIframe = isIframe
                     )
                 )
             }
@@ -311,6 +317,33 @@ class FutemaisRepository(context: Context) {
         }
     }
 
+    fun getWebAdminUrl(): String {
+        return prefs.getString("web_admin_url", "https://futeplayer-2b630.web.app") ?: "https://futeplayer-2b630.web.app"
+    }
+
+    fun saveWebAdminUrl(url: String) {
+        val cleanUrl = url.trim().ifBlank { "https://futeplayer-2b630.web.app" }
+        prefs.edit().putString("web_admin_url", cleanUrl).apply()
+        val data = hashMapOf(
+            "web_admin_url" to cleanUrl,
+            "timestamp" to System.currentTimeMillis()
+        )
+        firestore?.collection("app_data")?.document("web_admin")?.set(data, com.google.firebase.firestore.SetOptions.merge())
+    }
+
+    fun syncWebAdminUrlFromFirestore(onUrlFound: (String) -> Unit) {
+        firestore?.collection("app_data")?.document("web_admin")?.addSnapshotListener { doc, error ->
+            if (error != null) return@addSnapshotListener
+            if (doc != null && doc.exists()) {
+                val url = doc.getString("web_admin_url")
+                if (!url.isNullOrBlank()) {
+                    prefs.edit().putString("web_admin_url", url).apply()
+                    onUrlFound(url)
+                }
+            }
+        }
+    }
+
     suspend fun fetchLatestCustomNotification(): Triple<String, String, Long>? = kotlinx.coroutines.withContext(Dispatchers.IO) {
         try {
             val task = firestore?.collection("app_data")?.document("admin_notifications")?.get()
@@ -331,10 +364,49 @@ class FutemaisRepository(context: Context) {
         }
     }
 
+    private val adGuardClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    private val dohAdGuard: DnsOverHttps by lazy {
+        DnsOverHttps.Builder()
+            .client(adGuardClient)
+            .url("https://dns.adguard.com/dns-query".toHttpUrl())
+            .bootstrapDnsHosts(
+                InetAddress.getByName("94.140.14.14"),
+                InetAddress.getByName("94.140.15.15")
+            )
+            .includeIPv6(false)
+            .build()
+    }
+
+    private val adGuardDns: Dns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            return try {
+                val addresses = dohAdGuard.lookup(hostname)
+                if (addresses.isNotEmpty()) {
+                    Log.d(TAG, "AdGuard Private DNS (dns.adguard.com) resolved $hostname: $addresses")
+                    addresses
+                } else {
+                    Dns.SYSTEM.lookup(hostname)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "AdGuard DoH lookup failed for $hostname, using fallback: ${e.message}")
+                try {
+                    Dns.SYSTEM.lookup(hostname)
+                } catch (fallbackError: Exception) {
+                    throw fallbackError
+                }
+            }
+        }
+    }
+
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
+        .dns(adGuardDns)
         .build()
 
     private val channelTestClient: OkHttpClient by lazy {
@@ -343,6 +415,7 @@ class FutemaisRepository(context: Context) {
             .readTimeout(6, TimeUnit.SECONDS)
             .callTimeout(8, TimeUnit.SECONDS)
             .followRedirects(true)
+            .dns(adGuardDns)
             .build()
     }
 
@@ -539,9 +612,10 @@ class FutemaisRepository(context: Context) {
                     put("posterUrl", ch.posterUrl ?: "")
                     put("isLive", ch.isLive)
                     put("embedUrl", ch.embedUrl ?: "")
-                    put("forceWebPlayer", ch.forceWebPlayer)
+                    put("forceWebPlayer", ch.forceWebPlayer || ch.isIframe)
                     put("category", ch.category ?: "Esportes")
                     put("isWorking", ch.isWorking)
+                    put("isIframe", ch.isIframe || ch.streamUrl.contains("<iframe", ignoreCase = true) || ch.embedUrl?.contains("<iframe", ignoreCase = true) == true)
                 }
                 arr.put(obj)
             }
@@ -1651,92 +1725,103 @@ class FutemaisRepository(context: Context) {
 
     suspend fun fetchMatches(url: String = "https://futemais.link/app2/"): Result<List<MatchItem>> =
         withContext(Dispatchers.IO) {
-            try {
-                val targetUrl = url
-                val request = Request.Builder()
-                    .url(targetUrl)
-                    .header(
-                        "User-Agent",
-                        "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
-                    )
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                    .header("Referer", "https://futemais.link/")
-                    .build()
+            val candidateUrls = if (url == "https://futemais.link/app2/") {
+                listOf("https://futemais.link/app2/", "https://futemais.link/app/")
+            } else {
+                listOf(url)
+            }
 
-                val response = client.newCall(request).execute()
-                val html = response.body?.string() ?: ""
-
-                if (html.isBlank()) {
-                    return@withContext Result.success(getFallbackMatches())
-                }
-
-                val doc = Jsoup.parse(html)
-                val matches = mutableListOf<MatchItem>()
-
-                var currentDateTag = "HOJE"
-
-                val allSections = doc.select(".data-separador, .match-container")
-                for (element in allSections) {
-                    if (element.hasClass("data-separador")) {
-                        val tag = element.select(".sep-tag").text()
-                        val date = element.select(".sep-data").text()
-                        currentDateTag = if (tag.isNotBlank()) "$tag - $date".trim() else date
-                    } else if (element.hasClass("match-container")) {
-                        val link = element.selectFirst("a")?.attr("href") ?: ""
-                        val homeName = element.select(".left-team .team-name").text().ifBlank {
-                            element.select(".left-team img").attr("alt")
-                        }.ifBlank { "Time A" }
-                        val homeLogo = element.select(".left-team img").attr("src")
-
-                        val awayName = element.select(".right-team .team-name").text().ifBlank {
-                            element.select(".right-team img").attr("alt")
-                        }.ifBlank { "Time B" }
-                        val awayLogo = element.select(".right-team img").attr("src")
-
-                        val championship = element.select("#match").text().ifBlank { "Futebol Ao Vivo" }
-                        val time = element.select("#match-time").text().ifBlank { "Ao Vivo" }
-
-                        val id = if (link.contains("id=")) {
-                            link.substringAfter("id=")
-                        } else {
-                            "$homeName-$awayName-$time".replace("\\s+".toRegex(), "_")
-                        }
-
-                        val isLive = time.contains(":") == false || isCurrentTimeAround(time)
-
-                        matches.add(
-                            MatchItem(
-                                id = id,
-                                homeTeam = homeName,
-                                homeLogoUrl = homeLogo,
-                                awayTeam = awayName,
-                                awayLogoUrl = awayLogo,
-                                championship = championship,
-                                time = time,
-                                dateTag = currentDateTag,
-                                detailUrl = link,
-                                isLiveNow = isLive,
-                                isFavorite = _favoriteIds.value.contains(id)
-                            )
+            for (targetUrl in candidateUrls) {
+                try {
+                    Log.d(TAG, "Buscando jogos via DNS privada (dns.adguard.com) em: $targetUrl")
+                    val request = Request.Builder()
+                        .url(targetUrl)
+                        .header(
+                            "User-Agent",
+                            "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
                         )
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                        .header("Referer", "https://futemais.link/")
+                        .build()
+
+                    val response = client.newCall(request).execute()
+                    val html = response.body?.string() ?: ""
+
+                    if (html.isNotBlank()) {
+                        val parsed = parseHtmlMatches(html)
+                        if (parsed.isNotEmpty()) {
+                            Log.d(TAG, "Jogos carregados com sucesso (${parsed.size} partidas) via DNS privada dns.adguard.com")
+                            return@withContext Result.success(parsed)
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Erro ao buscar jogos em $targetUrl via DNS privada: ${e.message}")
+                }
+            }
+
+            Log.w(TAG, "Usando lista de jogos alternativa/fallback")
+            Result.success(getFallbackMatches())
+        }
+
+    private fun parseHtmlMatches(html: String): List<MatchItem> {
+        val doc = Jsoup.parse(html)
+        val matches = mutableListOf<MatchItem>()
+
+        var currentDateTag = "HOJE"
+
+        val allSections = doc.select(".data-separador, .match-container")
+        for (element in allSections) {
+            if (element.hasClass("data-separador")) {
+                val tag = element.select(".sep-tag").text()
+                val date = element.select(".sep-data").text()
+                currentDateTag = if (tag.isNotBlank()) "$tag - $date".trim() else date
+            } else if (element.hasClass("match-container")) {
+                val link = element.selectFirst("a")?.attr("href") ?: ""
+                val homeName = element.select(".left-team .team-name").text().ifBlank {
+                    element.select(".left-team img").attr("alt")
+                }.ifBlank { "Time A" }
+                val homeLogo = element.select(".left-team img").attr("src")
+
+                val awayName = element.select(".right-team .team-name").text().ifBlank {
+                    element.select(".right-team img").attr("alt")
+                }.ifBlank { "Time B" }
+                val awayLogo = element.select(".right-team img").attr("src")
+
+                val championship = element.select("#match").text().ifBlank { "Futebol Ao Vivo" }
+                val time = element.select("#match-time").text().ifBlank { "Ao Vivo" }
+
+                val id = if (link.contains("id=")) {
+                    link.substringAfter("id=")
+                } else {
+                    "$homeName-$awayName-$time".replace("\\s+".toRegex(), "_")
                 }
 
-                if (matches.isEmpty()) {
-                    // Try parsing with fallback regex
-                    val regexMatches = parseWithRegex(html, currentDateTag)
-                    if (regexMatches.isNotEmpty()) {
-                        return@withContext Result.success(regexMatches)
-                    }
-                    return@withContext Result.success(getFallbackMatches())
-                }
+                val isLive = time.contains(":") == false || isCurrentTimeAround(time)
 
-                Result.success(matches)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error scraping futemais matches: ${e.message}", e)
-                Result.success(getFallbackMatches())
+                matches.add(
+                    MatchItem(
+                        id = id,
+                        homeTeam = homeName,
+                        homeLogoUrl = homeLogo,
+                        awayTeam = awayName,
+                        awayLogoUrl = awayLogo,
+                        championship = championship,
+                        time = time,
+                        dateTag = currentDateTag,
+                        detailUrl = link,
+                        isLiveNow = isLive,
+                        isFavorite = _favoriteIds.value.contains(id)
+                    )
+                )
             }
         }
+
+        if (matches.isEmpty()) {
+            return parseWithRegex(html, currentDateTag)
+        }
+
+        return matches
+    }
 
     private fun parseWithRegex(html: String, defaultDateTag: String): List<MatchItem> {
         val matches = mutableListOf<MatchItem>()

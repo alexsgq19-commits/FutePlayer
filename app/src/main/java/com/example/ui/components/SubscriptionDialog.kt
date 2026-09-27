@@ -3,6 +3,8 @@ package com.example.ui.components
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -24,8 +26,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.models.PaymentOrder
+import com.example.data.models.PaymentSetting
 import com.example.data.models.User
 import com.example.ui.theme.StadiumAccentYellow
+import com.example.ui.theme.StadiumCyanSecondary
 import com.example.ui.theme.StadiumGreenPrimary
 
 sealed interface SubscriptionFlowState {
@@ -39,6 +43,7 @@ sealed interface SubscriptionFlowState {
 @Composable
 fun SubscriptionDialog(
     user: User?,
+    paymentSetting: PaymentSetting = PaymentSetting(),
     flowState: SubscriptionFlowState,
     onStartPayment: () -> Unit,
     onAlreadyPaid: () -> Unit = {},
@@ -47,6 +52,7 @@ fun SubscriptionDialog(
     onSimulateAdminApproval: ((String) -> Unit)? = null // Apenas se usuário for ADMIN testando
 ) {
     val context = LocalContext.current
+    var hasClickedPayNow by remember { mutableStateOf(false) }
 
     Dialog(
         onDismissRequest = {
@@ -166,7 +172,7 @@ fun SubscriptionDialog(
 
                                     Row(verticalAlignment = Alignment.Bottom) {
                                         Text(
-                                            text = "R$ 10,00",
+                                            text = paymentSetting.getFormattedAmount(),
                                             style = MaterialTheme.typography.headlineMedium,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = StadiumGreenPrimary
@@ -240,7 +246,10 @@ fun SubscriptionDialog(
 
                             // Botão Principal: Pagar Agora
                             Button(
-                                onClick = onStartPayment,
+                                onClick = {
+                                    hasClickedPayNow = true
+                                    onStartPayment()
+                                },
                                 shape = RoundedCornerShape(14.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary),
                                 modifier = Modifier
@@ -250,22 +259,31 @@ fun SubscriptionDialog(
                                 Icon(Icons.Default.Payment, contentDescription = null, tint = Color.Black)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "PAGAR AGORA (R$ 10,00)",
+                                    text = "PAGAR AGORA (${paymentSetting.getFormattedAmount()})",
                                     fontWeight = FontWeight.Bold,
                                     color = Color.Black,
                                     fontSize = 15.sp
                                 )
                             }
 
-                            // Botão Secundário: Já fiz o pagamento
-                            OutlinedButton(
-                                onClick = onAlreadyPaid,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.fillMaxWidth()
+                            // Botão Secundário: Já fiz o pagamento (aparece apenas após clicar em Pagar Agora)
+                            AnimatedVisibility(
+                                visible = hasClickedPayNow,
+                                enter = fadeIn() + expandVertically()
                             ) {
-                                Icon(Icons.Default.CheckCircleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("JÁ FIZ O PAGAMENTO (AVISAR ADMIN)", fontWeight = FontWeight.Bold)
+                                OutlinedButton(
+                                    onClick = onAlreadyPaid,
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = StadiumCyanSecondary
+                                    ),
+                                    border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.6f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.CheckCircleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("JÁ FIZ O PAGAMENTO (AVISAR ADMIN)", fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
 

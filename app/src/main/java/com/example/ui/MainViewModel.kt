@@ -87,7 +87,7 @@ data class HomeUiState(
     val currentTab: NavigationTab = NavigationTab.MATCHES,
     val networkStatus: NetworkStatus = NetworkStatus(),
     val latestApkUrl: String = "",
-    val latestVersionName: String = "1.2.0",
+    val latestVersionName: String = "1.3.0",
     val hasStoredApk: Boolean = false,
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Float = 0f,
@@ -115,7 +115,8 @@ data class HomeUiState(
     val nextSeasonForEpisode: SeasonItem? = null,
     val nextEpisodeItem: EpisodeItem? = null,
     val watchProgressMap: Map<String, com.example.data.WatchProgress> = emptyMap(),
-    val initialPlaybackPositionMs: Long = 0L
+    val initialPlaybackPositionMs: Long = 0L,
+    val webAdminUrl: String = "https://futeplayer-2b630.web.app"
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -341,23 +342,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Atualiza o link de pagamento em settings/payment (Apenas ADMIN).
+     * Atualiza o link e o valor de pagamento em settings/payment (Apenas ADMIN).
      */
-    fun updatePaymentUrl(url: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+    fun updatePaymentSetting(url: String, amountCents: Long, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
         val admin = _currentUser.value
         if (admin == null || (!isCurrentUserAdmin())) {
-            onResult(false, "Permissão negada. Apenas administradores podem alterar o link de pagamento.")
+            onResult(false, "Permissão negada. Apenas administradores podem alterar as configurações de pagamento.")
             return
         }
 
         viewModelScope.launch {
-            val res = subscriptionRepository.updatePaymentSetting(url, admin.uid)
+            val res = subscriptionRepository.updatePaymentSetting(url, amountCents, admin.uid)
             res.onSuccess {
                 onResult(true, null)
             }.onFailure { err ->
-                onResult(false, err.localizedMessage ?: "Erro ao salvar link de pagamento.")
+                onResult(false, err.localizedMessage ?: "Erro ao salvar configurações de pagamento.")
             }
         }
+    }
+
+    /**
+     * Atualiza o link de pagamento em settings/payment (Apenas ADMIN).
+     */
+    fun updatePaymentUrl(url: String, onResult: (Boolean, String?) -> Unit = { _, _ -> }) {
+        updatePaymentSetting(url, paymentSetting.value.amountCents, onResult)
     }
 
     /**
@@ -482,7 +490,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val savedUrl = sharedPrefs.getString("latest_apk_url", "") ?: ""
-        val savedVersion = sharedPrefs.getString("latest_version_name", "1.2.0") ?: "1.2.0"
+        val savedVersion = sharedPrefs.getString("latest_version_name", "1.3.0") ?: "1.3.0"
         val savedWvcUrl = sharedPrefs.getString("wvc_apk_url", "") ?: ""
         val defaultWvcUrl = "https://github.com/instantbits/WebVideoCaster/releases/download/v5.7.0/WebVideoCaster-v5.7.0.apk"
         val finalWvcUrl = if (savedWvcUrl.isNotBlank()) savedWvcUrl else defaultWvcUrl
@@ -494,12 +502,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mediaCatalog = repository.getMediaCatalog(),
             latestApkUrl = savedUrl,
             latestVersionName = savedVersion,
-            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.2.0",
+            hasStoredApk = savedUrl.isNotBlank() || savedVersion != "1.3.0",
             webVideoCasterUrl = finalWvcUrl,
             supportWhatsappNumber = repository.getSupportWhatsappNumber(),
             autoCorrectionLogs = repository.getAutoCorrectionLogs(),
-            watchProgressMap = watchProgressRepository.progressFlow.value
+            watchProgressMap = watchProgressRepository.progressFlow.value,
+            webAdminUrl = repository.getWebAdminUrl()
         )
+
+        repository.syncWebAdminUrlFromFirestore { url ->
+            if (url.isNotBlank()) {
+                _uiState.value = _uiState.value.copy(webAdminUrl = url)
+            }
+        }
 
         viewModelScope.launch {
             watchProgressRepository.progressFlow.collect { progressMap ->
@@ -983,11 +998,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         subtitle: String,
         url: String,
         isWebPlayer: Boolean,
+        isIframe: Boolean = false,
         category: String = "Esportes",
         isWorking: Boolean = true,
         logoUrl: String? = null
     ) {
         val cleanUrl = url.trim()
+        val isIframeFinal = isIframe || cleanUrl.contains("<iframe", ignoreCase = true)
+        val isWeb = isWebPlayer || isIframeFinal
         val cleanTitle = if (title.isNotBlank()) title.trim() else "Canal Rápido"
         val cleanSubtitle = if (subtitle.isNotBlank()) subtitle.trim() else "Canal Adicionado por Admin"
         val cleanLogo = logoUrl?.trim()?.takeIf { it.isNotBlank() }
@@ -999,11 +1017,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             subtitle = cleanSubtitle,
             streamUrl = cleanUrl,
             posterUrl = cleanLogo,
-            embedUrl = if (isWebPlayer) cleanUrl else null,
-            forceWebPlayer = isWebPlayer,
+            embedUrl = cleanUrl,
+            forceWebPlayer = isWeb,
             isLive = true,
             category = category,
-            isWorking = isWorking
+            isWorking = isWorking,
+            isIframe = isIframeFinal
         )
 
         val updatedChannels = repository.addCustomChannel(newChannel)
@@ -1057,18 +1076,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         subtitle: String,
         url: String,
         isWebPlayer: Boolean,
+        isIframe: Boolean = false,
         category: String = "Esportes",
         isWorking: Boolean? = null,
         logoUrl: String? = null
     ) {
         val cleanUrl = url.trim()
+        val isIframeFinal = isIframe || cleanUrl.contains("<iframe", ignoreCase = true)
+        val isWeb = isWebPlayer || isIframeFinal
         val cleanTitle = if (title.isNotBlank()) title.trim() else "Canal Rápido"
         val cleanSubtitle = if (subtitle.isNotBlank()) subtitle.trim() else ""
         val cleanLogo = logoUrl?.trim()?.takeIf { it.isNotBlank() }
 
         val existing = _uiState.value.quickChannels.find { it.id == id }
         val targetWorking = isWorking ?: existing?.isWorking ?: true
-        val finalPoster = if (logoUrl != null) cleanLogo else existing?.posterUrl
+        val finalPoster = cleanLogo ?: existing?.posterUrl
 
         val updatedChannel = (existing ?: PlayableVideo(id = id, title = cleanTitle, subtitle = cleanSubtitle, streamUrl = cleanUrl)).copy(
             id = id,
@@ -1076,11 +1098,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             subtitle = cleanSubtitle,
             streamUrl = cleanUrl,
             posterUrl = finalPoster,
-            embedUrl = if (isWebPlayer) cleanUrl else existing?.embedUrl,
-            forceWebPlayer = isWebPlayer,
+            embedUrl = cleanUrl,
+            forceWebPlayer = isWeb,
             isLive = true,
             category = category,
-            isWorking = targetWorking
+            isWorking = targetWorking,
+            isIframe = isIframeFinal
         )
 
         repository.updateQuickChannel(updatedChannel)
@@ -1467,7 +1490,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun playMovie(movie: MediaItem) {
         val streamUrl = movie.movieStreamUrl.orEmpty()
         if (streamUrl.isBlank()) return
-        val isWeb = movie.isWebPlayer || !isDirectMedia(streamUrl)
+        val isIframe = streamUrl.contains("<iframe", ignoreCase = true)
+        val isWeb = movie.isWebPlayer || isIframe || !isDirectMedia(streamUrl)
         val video = PlayableVideo(
             id = movie.id,
             title = movie.title,
@@ -1479,7 +1503,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             forceWebPlayer = isWeb,
             category = movie.category,
             isFavorite = movie.isFavorite,
-            isWorking = movie.isWorking
+            isWorking = movie.isWorking,
+            isIframe = isIframe
         )
         _uiState.value = _uiState.value.copy(
             currentTab = NavigationTab.MOVIES_SERIES,
@@ -1497,7 +1522,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun playEpisode(series: MediaItem, season: SeasonItem, episode: EpisodeItem) {
         val streamUrl = episode.streamUrl
         if (streamUrl.isBlank()) return
-        val isWeb = episode.isWebPlayer || series.isWebPlayer || !isDirectMedia(streamUrl)
+        val isIframe = streamUrl.contains("<iframe", ignoreCase = true)
+        val isWeb = episode.isWebPlayer || series.isWebPlayer || isIframe || !isDirectMedia(streamUrl)
         val video = PlayableVideo(
             id = episode.id,
             title = "${series.title} - T${season.seasonNumber}:E${episode.episodeNumber}",
@@ -1509,7 +1535,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             forceWebPlayer = isWeb,
             category = series.category,
             isFavorite = series.isFavorite,
-            isWorking = series.isWorking
+            isWorking = series.isWorking,
+            isIframe = isIframe
         )
 
         val nextPair = findNextEpisode(series, season, episode)
@@ -1585,17 +1612,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (connectivityManager == null) return
 
         fun updateStatus() {
-            val activeNetwork = connectivityManager.activeNetwork
-            val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
-            val isConnected = capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            val type = when {
-                capabilities == null -> "Sem Conexão"
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Dados Móveis (4G/5G)"
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
-                else -> "Conectado"
+            val allNetworks = connectivityManager.allNetworks
+            var isConnected = false
+            var type = "Wi-Fi / Dados Móveis"
+            var isValidated = false
+
+            for (network in allNetworks) {
+                val caps = connectivityManager.getNetworkCapabilities(network)
+                if (caps != null && (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))) {
+                    isConnected = true
+                    type = when {
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Dados Móveis (4G/5G)"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                        else -> "Conectado"
+                    }
+                    isValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    break
+                }
             }
-            val isValidated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ?: false
+
+            if (!isConnected) {
+                val activeNetwork = connectivityManager.activeNetwork
+                val caps = connectivityManager.getNetworkCapabilities(activeNetwork)
+                if (caps != null) {
+                    isConnected = true
+                    type = when {
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Dados Móveis (4G/5G)"
+                        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                        else -> "Conectado"
+                    }
+                    isValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                }
+            }
+
+            // Always consider true if we have any active transport or fallback
+            if (!isConnected) {
+                isConnected = true // Fallback so mobile data without validation still works smoothly
+            }
 
             _uiState.value = _uiState.value.copy(
                 networkStatus = NetworkStatus(
@@ -1613,6 +1668,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             connectivityManager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     updateStatus()
+                    if (_uiState.value.matches.isEmpty()) {
+                        loadMatches(isRefresh = true, isSilentBackground = true)
+                    }
                 }
                 override fun onLost(network: Network) {
                     updateStatus()
@@ -2009,6 +2067,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (trimmed.isNotBlank()) {
             repository.saveSupportWhatsappNumber(trimmed)
             _uiState.value = _uiState.value.copy(supportWhatsappNumber = trimmed)
+        }
+    }
+
+    fun updateWebAdminUrl(newUrl: String) {
+        val trimmed = newUrl.trim()
+        if (trimmed.isNotBlank()) {
+            repository.saveWebAdminUrl(trimmed)
+            _uiState.value = _uiState.value.copy(webAdminUrl = trimmed)
+        }
+    }
+
+    fun openWebAdminInBrowser(context: Context) {
+        try {
+            val rawUrl = _uiState.value.webAdminUrl.ifBlank { "https://futeplayer-2b630.web.app" }
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Erro ao abrir painel web: ${e.message}", e)
         }
     }
 

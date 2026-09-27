@@ -165,11 +165,11 @@ class MainActivity : AppCompatActivity() {
                                         viewModel.clearSelectedMedia()
                                     },
                                     onToggleChannelWorkingStatus = { viewModel.toggleChannelWorkingStatus(it) },
-                                    onAddQuickChannel = { title, subtitle, url, isWebPlayer, category, isWorking, logoUrl ->
-                                        viewModel.addQuickChannel(title, subtitle, url, isWebPlayer, category, isWorking, logoUrl)
+                                    onAddQuickChannel = { title, subtitle, url, isWebPlayer, isIframe, category, isWorking, logoUrl ->
+                                        viewModel.addQuickChannel(title, subtitle, url, isWebPlayer, isIframe, category, isWorking, logoUrl)
                                     },
-                                    onEditQuickChannel = { id, title, subtitle, url, isWebPlayer, category, isWorking, logoUrl ->
-                                        viewModel.updateQuickChannel(id, title, subtitle, url, isWebPlayer, category, isWorking, logoUrl)
+                                    onEditQuickChannel = { id, title, subtitle, url, isWebPlayer, isIframe, category, isWorking, logoUrl ->
+                                        viewModel.updateQuickChannel(id, title, subtitle, url, isWebPlayer, isIframe, category, isWorking, logoUrl)
                                     },
                                     onDeleteQuickChannel = { id ->
                                         viewModel.deleteQuickChannel(id)
@@ -246,6 +246,9 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     paymentSetting = paymentSetting,
                                     pendingPaymentRequests = pendingPaymentRequests,
+                                    onUpdatePaymentSetting = { url, amountCents, cb ->
+                                        viewModel.updatePaymentSetting(url, amountCents, cb)
+                                    },
                                     onUpdatePaymentUrl = { url, cb ->
                                         viewModel.updatePaymentUrl(url, cb)
                                     },
@@ -254,6 +257,12 @@ class MainActivity : AppCompatActivity() {
                                     },
                                     onConfirmManualPayment = { req, cb ->
                                         viewModel.confirmManualPayment(req, cb)
+                                    },
+                                    onOpenWebAdmin = {
+                                        viewModel.openWebAdminInBrowser(this@MainActivity)
+                                    },
+                                    onUpdateWebAdminUrl = { newUrl ->
+                                        viewModel.updateWebAdminUrl(newUrl)
                                     }
                                 )
                             }
@@ -392,6 +401,7 @@ class MainActivity : AppCompatActivity() {
                         if (showSubscriptionDialog) {
                             SubscriptionDialog(
                                 user = currentUser,
+                                paymentSetting = paymentSetting,
                                 flowState = subscriptionFlowState,
                                 onStartPayment = { viewModel.startSubscriptionPayment(this@MainActivity) },
                                 onAlreadyPaid = {

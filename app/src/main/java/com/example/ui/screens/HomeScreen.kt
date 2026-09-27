@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.content.Context
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import android.content.Intent
 import android.net.Uri
@@ -17,6 +18,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -43,8 +45,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -119,6 +125,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
@@ -203,8 +214,8 @@ fun HomeScreen(
     onSelectMedia: (MediaItem?) -> Unit = {},
     onDismissMedia: () -> Unit = {},
     onToggleChannelWorkingStatus: (String) -> Unit = {},
-    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _ -> },
-    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, isIframe: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, isIframe: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     onDeleteQuickChannel: (id: String) -> Unit = {},
     onResetDefaultChannel: (id: String) -> Unit = {},
     onAddMediaGenre: (String) -> Unit = {},
@@ -235,26 +246,216 @@ fun HomeScreen(
     onClearCorrectionLogs: () -> Unit = {},
     paymentSetting: PaymentSetting = PaymentSetting(),
     pendingPaymentRequests: List<PaymentRequestItem> = emptyList(),
+    onUpdatePaymentSetting: (String, Long, (Boolean, String?) -> Unit) -> Unit = { _, _, _ -> },
     onUpdatePaymentUrl: (String, (Boolean, String?) -> Unit) -> Unit = { _, _ -> },
     onCreatePaymentRequest: ((Boolean, String) -> Unit) -> Unit = {},
     onConfirmManualPayment: (PaymentRequestItem, (Boolean, String) -> Unit) -> Unit = { _, _ -> },
+    onOpenWebAdmin: () -> Unit = {},
+    onUpdateWebAdminUrl: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val isAdmin = currentUser?.role == "ADMIN" || currentUser?.cpf == "06462555505"
     val onlineUsersCount = remember(allUsers) { allUsers.count { it.isCurrentlyOnline() } }
+    val coroutineScope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(
+        initialPage = uiState.currentTab.ordinal,
+        pageCount = { 4 }
+    )
+
+    LaunchedEffect(uiState.currentTab) {
+        if (pagerState.currentPage != uiState.currentTab.ordinal) {
+            pagerState.animateScrollToPage(uiState.currentTab.ordinal)
+        }
+    }
+
+    LaunchedEffect(pagerState.settledPage) {
+        val tab = NavigationTab.values().getOrNull(pagerState.settledPage)
+        if (tab != null && tab != uiState.currentTab) {
+            onTabSelect(tab)
+        }
+    }
 
     Scaffold(
         modifier = modifier
             .fillMaxSize()
             .testTag("home_screen"),
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .navigationBarsPadding(),
+                shape = RoundedCornerShape(22.dp),
+                color = Color(0xFF101828),
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, Color(0xFF1E2D4A).copy(alpha = 0.8f))
+            ) {
+                NavigationBar(
+                    containerColor = Color.Transparent,
+                    tonalElevation = 0.dp,
+                    windowInsets = WindowInsets(0, 0, 0, 0),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(58.dp)
+                        .testTag("bottom_nav_bar")
+                ) {
+                    NavigationBarItem(
+                        selected = uiState.currentTab == NavigationTab.MATCHES,
+                        onClick = {
+                            onTabSelect(NavigationTab.MATCHES)
+                            coroutineScope.launch { pagerState.animateScrollToPage(0) }
+                        },
+                        icon = {
+                            if (uiState.matches.isNotEmpty()) {
+                                BadgedBox(
+                                    badge = {
+                                        Badge(
+                                            containerColor = StadiumGreenPrimary,
+                                            contentColor = Color.Black
+                                        ) {
+                                            Text("${uiState.matches.size}", fontSize = 9.sp)
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SportsSoccer,
+                                        contentDescription = "Jogos",
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.SportsSoccer,
+                                    contentDescription = "Jogos",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        label = {
+                            Text(
+                                text = "Jogos",
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (uiState.currentTab == NavigationTab.MATCHES) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = StadiumGreenPrimary,
+                            selectedTextColor = StadiumGreenPrimary,
+                            indicatorColor = StadiumGreenPrimary.copy(alpha = 0.16f),
+                            unselectedIconColor = Color(0xFF94A3B8),
+                            unselectedTextColor = Color(0xFF94A3B8)
+                        ),
+                        modifier = Modifier.testTag("tab_matches")
+                    )
+
+                    NavigationBarItem(
+                        selected = uiState.currentTab == NavigationTab.CHANNELS,
+                        onClick = {
+                            onTabSelect(NavigationTab.CHANNELS)
+                            coroutineScope.launch { pagerState.animateScrollToPage(1) }
+                        },
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Default.Tv,
+                                contentDescription = "Canais Rápidos",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = "Canais Rápidos",
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (uiState.currentTab == NavigationTab.CHANNELS) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = StadiumGreenPrimary,
+                            selectedTextColor = StadiumGreenPrimary,
+                            indicatorColor = StadiumGreenPrimary.copy(alpha = 0.16f),
+                            unselectedIconColor = Color(0xFF94A3B8),
+                            unselectedTextColor = Color(0xFF94A3B8)
+                        ),
+                        modifier = Modifier.testTag("tab_channels")
+                    )
+
+                    NavigationBarItem(
+                        selected = uiState.currentTab == NavigationTab.MOVIES_SERIES,
+                        onClick = {
+                            onTabSelect(NavigationTab.MOVIES_SERIES)
+                            coroutineScope.launch { pagerState.animateScrollToPage(2) }
+                        },
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Default.Movie,
+                                contentDescription = "Filmes & Séries",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = "Filmes & Séries",
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (uiState.currentTab == NavigationTab.MOVIES_SERIES) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = StadiumGreenPrimary,
+                            selectedTextColor = StadiumGreenPrimary,
+                            indicatorColor = StadiumGreenPrimary.copy(alpha = 0.16f),
+                            unselectedIconColor = Color(0xFF94A3B8),
+                            unselectedTextColor = Color(0xFF94A3B8)
+                        ),
+                        modifier = Modifier.testTag("tab_movies_series")
+                    )
+
+                    NavigationBarItem(
+                        selected = uiState.currentTab == NavigationTab.SUPPORT,
+                        onClick = {
+                            onTabSelect(NavigationTab.SUPPORT)
+                            coroutineScope.launch { pagerState.animateScrollToPage(3) }
+                        },
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Default.Chat,
+                                contentDescription = "Suporte",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = "Suporte",
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (uiState.currentTab == NavigationTab.SUPPORT) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = StadiumGreenPrimary,
+                            selectedTextColor = StadiumGreenPrimary,
+                            indicatorColor = StadiumGreenPrimary.copy(alpha = 0.16f),
+                            unselectedIconColor = Color(0xFF94A3B8),
+                            unselectedTextColor = Color(0xFF94A3B8)
+                        ),
+                        modifier = Modifier.testTag("tab_support")
+                    )
+                }
+            }
+        }
     ) { paddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .statusBarsPadding()
                 .imePadding()
         ) {
             // ==========================================
@@ -263,7 +464,7 @@ fun HomeScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -549,75 +750,6 @@ fun HomeScreen(
                 }
             }
 
-            // ==========================================
-            // NAVIGATION TABS
-            // ==========================================
-            ScrollableTabRow(
-                selectedTabIndex = uiState.currentTab.ordinal,
-                containerColor = Color.Transparent,
-                contentColor = StadiumGreenPrimary,
-                edgePadding = 16.dp,
-                divider = {},
-                indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        Modifier.tabIndicatorOffset(tabPositions[uiState.currentTab.ordinal]),
-                        color = StadiumGreenPrimary
-                    )
-                }
-            ) {
-                Tab(
-                    selected = uiState.currentTab == NavigationTab.MATCHES,
-                    onClick = { onTabSelect(NavigationTab.MATCHES) },
-                    text = {
-                        Text(
-                            text = "Jogos & Ao Vivo (${uiState.matches.size})",
-                            fontWeight = if (uiState.currentTab == NavigationTab.MATCHES) FontWeight.Bold else FontWeight.Normal,
-                            color = if (uiState.currentTab == NavigationTab.MATCHES) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    modifier = Modifier.testTag("tab_matches")
-                )
-
-                Tab(
-                    selected = uiState.currentTab == NavigationTab.CHANNELS,
-                    onClick = { onTabSelect(NavigationTab.CHANNELS) },
-                    text = {
-                        Text(
-                            text = "Canais Rápidos",
-                            fontWeight = if (uiState.currentTab == NavigationTab.CHANNELS) FontWeight.Bold else FontWeight.Normal,
-                            color = if (uiState.currentTab == NavigationTab.CHANNELS) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    modifier = Modifier.testTag("tab_channels")
-                )
-
-                Tab(
-                    selected = uiState.currentTab == NavigationTab.MOVIES_SERIES,
-                    onClick = { onTabSelect(NavigationTab.MOVIES_SERIES) },
-                    text = {
-                        Text(
-                            text = "Filmes & Séries (${uiState.mediaCatalog.size})",
-                            fontWeight = if (uiState.currentTab == NavigationTab.MOVIES_SERIES) FontWeight.Bold else FontWeight.Normal,
-                            color = if (uiState.currentTab == NavigationTab.MOVIES_SERIES) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    modifier = Modifier.testTag("tab_movies_series")
-                )
-
-                Tab(
-                    selected = uiState.currentTab == NavigationTab.SUPPORT,
-                    onClick = { onTabSelect(NavigationTab.SUPPORT) },
-                    text = {
-                        Text(
-                            text = "Suporte",
-                            fontWeight = if (uiState.currentTab == NavigationTab.SUPPORT) FontWeight.Bold else FontWeight.Normal,
-                            color = if (uiState.currentTab == NavigationTab.SUPPORT) StadiumGreenPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    modifier = Modifier.testTag("tab_support")
-                )
-            }
-
             // Championship filter chips (only on matches tab)
             if (uiState.currentTab == NavigationTab.MATCHES && uiState.availableChampionships.size > 1) {
                 LazyRow(
@@ -709,91 +841,103 @@ fun HomeScreen(
                     .fillMaxSize()
                     .weight(1f)
             ) {
-                when (uiState.currentTab) {
-                    NavigationTab.MATCHES -> {
-                        MatchesListContent(
-                            uiState = uiState,
-                            onSelectMatch = onSelectMatch,
-                            onToggleFavorite = onToggleFavorite,
-                            onRefresh = onRefresh
-                        )
-                    }
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondViewportPageCount = 1,
+                    key = { it }
+                ) { page ->
+                    when (page) {
+                        0 -> {
+                            MatchesListContent(
+                                uiState = uiState,
+                                onSelectMatch = onSelectMatch,
+                                onToggleFavorite = onToggleFavorite,
+                                onRefresh = onRefresh
+                            )
+                        }
 
-                    NavigationTab.CHANNELS -> {
-                        ChannelsGridContent(
-                            channels = uiState.quickChannels,
-                            searchQuery = uiState.searchQuery,
-                            customCategories = uiState.customCategories,
-                            currentUser = currentUser,
-                            isTestingChannels = uiState.isTestingChannels,
-                            channelTestProgressText = uiState.channelTestProgressText,
-                            adminChannelAlert = uiState.adminChannelAlert,
-                            onPlayChannel = onPlayDirect,
-                            onToggleFavorite = onToggleFavorite,
-                            onToggleChannelWorkingStatus = onToggleChannelWorkingStatus,
-                            onTestAllChannels = onTestAllChannels,
-                            onTestSingleChannel = onTestSingleChannel,
-                            onDismissAdminChannelAlert = onDismissAdminChannelAlert,
-                            onAddQuickChannel = onAddQuickChannel,
-                            onEditQuickChannel = onEditQuickChannel,
-                            onDeleteQuickChannel = onDeleteQuickChannel,
-                            onResetDefaultChannel = onResetDefaultChannel,
-                            onCreateCategory = onCreateCategory,
-                            onDeleteCategory = onDeleteCategory,
-                            onEditCategory = onEditCategory
-                        )
-                    }
+                        1 -> {
+                            ChannelsGridContent(
+                                channels = uiState.quickChannels,
+                                searchQuery = uiState.searchQuery,
+                                customCategories = uiState.customCategories,
+                                currentUser = currentUser,
+                                isTestingChannels = uiState.isTestingChannels,
+                                channelTestProgressText = uiState.channelTestProgressText,
+                                adminChannelAlert = uiState.adminChannelAlert,
+                                onPlayChannel = onPlayDirect,
+                                onToggleFavorite = onToggleFavorite,
+                                onToggleChannelWorkingStatus = onToggleChannelWorkingStatus,
+                                onTestAllChannels = onTestAllChannels,
+                                onTestSingleChannel = onTestSingleChannel,
+                                onDismissAdminChannelAlert = onDismissAdminChannelAlert,
+                                onAddQuickChannel = onAddQuickChannel,
+                                onEditQuickChannel = onEditQuickChannel,
+                                onDeleteQuickChannel = onDeleteQuickChannel,
+                                onResetDefaultChannel = onResetDefaultChannel,
+                                onCreateCategory = onCreateCategory,
+                                onDeleteCategory = onDeleteCategory,
+                                onEditCategory = onEditCategory,
+                                onOpenWebAdmin = onOpenWebAdmin
+                            )
+                        }
 
-                    NavigationTab.MOVIES_SERIES -> {
-                        MediaScreenContent(
-                            mediaList = uiState.mediaCatalog,
-                            searchQuery = uiState.searchQuery,
-                            isAdmin = isAdmin,
-                            customMediaGenres = uiState.customMediaGenres,
-                            selectedMediaItem = uiState.selectedMediaItem,
-                            selectedSeason = uiState.selectedSeason,
-                            selectedEpisode = uiState.selectedEpisode,
-                            onSelectMedia = onSelectMedia,
-                            onDismissMedia = onDismissMedia,
-                            onPlayMovie = onPlayMovie,
-                            onPlayEpisode = onPlayEpisode,
-                            onAddOrUpdateMedia = onAddOrUpdateMedia,
-                            onDeleteMedia = onDeleteMedia,
-                            onToggleFavorite = onToggleMediaFavorite,
-                            isTestingMovies = isTestingMovies,
-                            movieTestProgressText = movieTestProgressText,
-                            onTestAllMovies = onTestAllMovies,
-                            onOpenMoviesApi = onOpenMoviesApi,
-                            onAddMediaGenre = onAddMediaGenre,
-                            onRenameMediaGenre = onRenameMediaGenre,
-                            onDeleteMediaGenre = onDeleteMediaGenre
-                        )
-                    }
+                        2 -> {
+                            MediaScreenContent(
+                                mediaList = uiState.mediaCatalog,
+                                searchQuery = uiState.searchQuery,
+                                isAdmin = isAdmin,
+                                customMediaGenres = uiState.customMediaGenres,
+                                selectedMediaItem = uiState.selectedMediaItem,
+                                selectedSeason = uiState.selectedSeason,
+                                selectedEpisode = uiState.selectedEpisode,
+                                onSelectMedia = onSelectMedia,
+                                onDismissMedia = onDismissMedia,
+                                onPlayMovie = onPlayMovie,
+                                onPlayEpisode = onPlayEpisode,
+                                onAddOrUpdateMedia = onAddOrUpdateMedia,
+                                onDeleteMedia = onDeleteMedia,
+                                onToggleFavorite = onToggleMediaFavorite,
+                                isTestingMovies = isTestingMovies,
+                                movieTestProgressText = movieTestProgressText,
+                                onTestAllMovies = onTestAllMovies,
+                                onOpenMoviesApi = onOpenMoviesApi,
+                                onAddMediaGenre = onAddMediaGenre,
+                                onRenameMediaGenre = onRenameMediaGenre,
+                                onDeleteMediaGenre = onDeleteMediaGenre,
+                                onOpenWebAdmin = onOpenWebAdmin
+                            )
+                        }
 
-                    NavigationTab.SUPPORT -> {
-                        SupportContent(
-                            uiState = uiState,
-                            currentUser = currentUser,
-                            onPublishUpdate = onPublishUpdate,
-                            onDownloadUpdate = onDownloadUpdate,
-                            onPrepareAndPromptInstall = onPrepareAndPromptInstall,
-                            onInstallUpdate = onInstallUpdate,
-                            onDismissInstallPrompt = onDismissInstallPrompt,
-                            onPublishWvcUrl = onPublishWvcUrl,
-                            onDownloadWvc = onDownloadWvc,
-                            onInstallWvc = onInstallWvc,
-                            onDismissWvcInstallPrompt = onDismissWvcInstallPrompt,
-                            onUpdateSupportWhatsapp = onUpdateSupportWhatsapp,
-                            onToggleRegistrationEnabled = onToggleRegistrationEnabled,
-                            onPublishCustomNotification = onPublishCustomNotification,
-                            onClearCorrectionLogs = onClearCorrectionLogs,
-                            networkStatus = uiState.networkStatus,
-                            paymentSetting = paymentSetting,
-                            pendingPaymentRequests = pendingPaymentRequests,
-                            onUpdatePaymentUrl = onUpdatePaymentUrl,
-                            onCreatePaymentRequest = onCreatePaymentRequest,
-                            onConfirmManualPayment = onConfirmManualPayment
-                        )
+                        3 -> {
+                            SupportContent(
+                                uiState = uiState,
+                                currentUser = currentUser,
+                                onPublishUpdate = onPublishUpdate,
+                                onDownloadUpdate = onDownloadUpdate,
+                                onPrepareAndPromptInstall = onPrepareAndPromptInstall,
+                                onInstallUpdate = onInstallUpdate,
+                                onDismissInstallPrompt = onDismissInstallPrompt,
+                                onPublishWvcUrl = onPublishWvcUrl,
+                                onDownloadWvc = onDownloadWvc,
+                                onInstallWvc = onInstallWvc,
+                                onDismissWvcInstallPrompt = onDismissWvcInstallPrompt,
+                                onUpdateSupportWhatsapp = onUpdateSupportWhatsapp,
+                                onToggleRegistrationEnabled = onToggleRegistrationEnabled,
+                                onPublishCustomNotification = onPublishCustomNotification,
+                                onClearCorrectionLogs = onClearCorrectionLogs,
+                                networkStatus = uiState.networkStatus,
+                                paymentSetting = paymentSetting,
+                                pendingPaymentRequests = pendingPaymentRequests,
+                                onUpdatePaymentSetting = onUpdatePaymentSetting,
+                                onUpdatePaymentUrl = onUpdatePaymentUrl,
+                                onCreatePaymentRequest = onCreatePaymentRequest,
+                                onConfirmManualPayment = onConfirmManualPayment,
+                                onOpenWebAdmin = onOpenWebAdmin,
+                                onUpdateWebAdminUrl = onUpdateWebAdminUrl
+                            )
+                        }
                     }
                 }
 
@@ -859,7 +1003,7 @@ fun HomeScreen(
                             CircularProgressIndicator(color = StadiumGreenPrimary)
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = "Buscando partidas em futemais.link/app2/...",
+                                text = "Buscando canais...",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall
                             )
@@ -980,13 +1124,14 @@ fun ChannelsGridContent(
     onTestAllChannels: () -> Unit = {},
     onTestSingleChannel: (String) -> Unit = {},
     onDismissAdminChannelAlert: () -> Unit = {},
-    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _ -> },
-    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onAddQuickChannel: (title: String, subtitle: String, url: String, isWebPlayer: Boolean, isIframe: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onEditQuickChannel: (id: String, title: String, subtitle: String, url: String, isWebPlayer: Boolean, isIframe: Boolean, category: String, isWorking: Boolean, logoUrl: String?) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     onDeleteQuickChannel: (id: String) -> Unit = {},
     onResetDefaultChannel: (id: String) -> Unit = {},
     onCreateCategory: (category: String) -> Unit = {},
     onDeleteCategory: (category: String) -> Unit = {},
-    onEditCategory: (oldName: String, newName: String) -> Unit = { _, _ -> }
+    onEditCategory: (oldName: String, newName: String) -> Unit = { _, _ -> },
+    onOpenWebAdmin: () -> Unit = {}
 ) {
     var selectedCategory by remember { mutableStateOf("Todos") }
 
@@ -1085,6 +1230,7 @@ fun ChannelsGridContent(
     var channelCategoryInput by remember { mutableStateOf("Esportes") }
     var customCategoryInput by remember { mutableStateOf("") }
     var isWebPlayerOption by remember { mutableStateOf(false) }
+    var isIframeOption by remember { mutableStateOf(false) }
     var channelIsWorkingInput by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -1098,6 +1244,7 @@ fun ChannelsGridContent(
     var editCategoryInput by remember { mutableStateOf("Esportes") }
     var editCustomCategoryInput by remember { mutableStateOf("") }
     var editIsWebPlayer by remember { mutableStateOf(false) }
+    var editIsIframe by remember { mutableStateOf(false) }
     var editIsWorking by remember { mutableStateOf(true) }
     var editErrorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -1248,6 +1395,31 @@ fun ChannelsGridContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedButton(
+                        onClick = onOpenWebAdmin,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = StadiumCyanSecondary
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("btn_channels_open_web_admin")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Language,
+                            contentDescription = "Painel Web",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Painel Web",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    OutlinedButton(
                         onClick = {
                             newCategoryInput = ""
                             categoryFeedbackError = null
@@ -1289,6 +1461,7 @@ fun ChannelsGridContent(
                             channelCategoryInput = defaultCat
                             customCategoryInput = ""
                             isWebPlayerOption = false
+                            isIframeOption = false
                             channelIsWorkingInput = true
                             errorMessage = null
                             showAddDialog = true
@@ -1680,6 +1853,7 @@ fun ChannelsGridContent(
                                     channelCategoryInput = defaultCat
                                     customCategoryInput = ""
                                     isWebPlayerOption = false
+                                    isIframeOption = false
                                     errorMessage = null
                                     showAddDialog = true
                                 },
@@ -1849,27 +2023,7 @@ fun ChannelsGridContent(
                                 contentAlignment = Alignment.Center
                             ) {
                                 val channelLogo = channel.posterUrl?.trim()
-                                if (!channelLogo.isNullOrBlank()) {
-                                    Surface(
-                                        modifier = Modifier
-                                            .size(46.dp)
-                                            .clip(RoundedCornerShape(12.dp)),
-                                        color = MaterialTheme.colorScheme.surface,
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                                    ) {
-                                        AsyncImage(
-                                            model = ImageRequest.Builder(LocalContext.current)
-                                                .data(channelLogo)
-                                                .crossfade(true)
-                                                .build(),
-                                            contentDescription = "Logomarca ${channel.title}",
-                                            contentScale = ContentScale.Fit,
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .padding(4.dp)
-                                        )
-                                    }
-                                } else {
+                                val fallbackBox: @Composable () -> Unit = {
                                     Box(
                                         modifier = Modifier
                                             .size(46.dp)
@@ -1893,6 +2047,45 @@ fun ChannelsGridContent(
                                             modifier = Modifier.size(24.dp)
                                         )
                                     }
+                                }
+
+                                if (!channelLogo.isNullOrBlank()) {
+                                    Surface(
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .clip(RoundedCornerShape(12.dp)),
+                                        color = Color(0xFF161E2E),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                    ) {
+                                        SubcomposeAsyncImage(
+                                            model = ImageRequest.Builder(LocalContext.current)
+                                                .data(channelLogo)
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = "Logomarca ${channel.title}",
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(4.dp),
+                                            loading = {
+                                                Box(
+                                                    modifier = Modifier.fillMaxSize(),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(16.dp),
+                                                        strokeWidth = 2.dp,
+                                                        color = StadiumGreenPrimary
+                                                    )
+                                                }
+                                            },
+                                            error = {
+                                                fallbackBox()
+                                            }
+                                        )
+                                    }
+                                } else {
+                                    fallbackBox()
                                 }
 
                                 // Bolinha no canto indicando funcionamento do canal (Verde = funcionando, Vermelho = não funcionando) - Visível apenas para ADMIN
@@ -2051,6 +2244,7 @@ fun ChannelsGridContent(
                                         editUrlInput = if (channel.streamUrl.isNotBlank()) channel.streamUrl else (channel.embedUrl ?: "")
                                         editLogoUrlInput = channel.posterUrl ?: ""
                                         editIsWebPlayer = channel.forceWebPlayer
+                                        editIsIframe = channel.isIframe || channel.streamUrl.contains("<iframe", ignoreCase = true) || channel.embedUrl?.contains("<iframe", ignoreCase = true) == true
                                         editIsWorking = channel.isWorking
                                         val knownCategories = listOf("Esportes", "Católicos (CXTV)", "Desenhos & Kids", "Filmes & Séries", "Abertos & Regionais")
                                         val curCategory = channel.category ?: "Esportes"
@@ -2467,12 +2661,17 @@ fun ChannelsGridContent(
                     // Campo: Link do Canal com botão de Colar
                     OutlinedTextField(
                         value = channelUrlInput,
-                        onValueChange = { 
-                            channelUrlInput = it
+                        onValueChange = { text ->
+                            val processed = text
+                            if (processed.contains("<iframe", ignoreCase = true)) {
+                                isWebPlayerOption = true
+                                isIframeOption = true
+                            }
+                            channelUrlInput = processed
                             errorMessage = null
                         },
-                        label = { Text("Link da Transmissão (URL / m3u8 / Web)") },
-                        placeholder = { Text("https://exemplo.com/stream.m3u8") },
+                        label = { Text("Link da Transmissão (URL ou Código <iframe>)") },
+                        placeholder = { Text("https://... ou <iframe src=\"...\"></iframe>") },
                         singleLine = false,
                         maxLines = 3,
                         trailingIcon = {
@@ -2480,7 +2679,12 @@ fun ChannelsGridContent(
                                 onClick = {
                                     val clip = clipboardManager.getText()?.text
                                     if (!clip.isNullOrBlank()) {
-                                        channelUrlInput = clip.trim()
+                                        val processed = clip.trim()
+                                        if (processed.contains("<iframe", ignoreCase = true)) {
+                                            isWebPlayerOption = true
+                                            isIframeOption = true
+                                        }
+                                        channelUrlInput = processed
                                         errorMessage = null
                                     }
                                 },
@@ -2501,6 +2705,54 @@ fun ChannelsGridContent(
                             focusedLabelColor = StadiumGreenPrimary
                         )
                     )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Switch para Incorporação via <iframe>
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Language,
+                                    contentDescription = null,
+                                    tint = StadiumGreenPrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Incorporação via <iframe>",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Text(
+                                text = "Tratar transmissão como <iframe> incorporado no player",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        androidx.compose.material3.Switch(
+                            checked = isIframeOption,
+                            onCheckedChange = { 
+                                isIframeOption = it
+                                if (it) isWebPlayerOption = true
+                            },
+                            modifier = Modifier.testTag("switch_iframe_option"),
+                            colors = androidx.compose.material3.SwitchDefaults.colors(
+                                checkedThumbColor = StadiumGreenPrimary,
+                                checkedTrackColor = StadiumGreenPrimary.copy(alpha = 0.4f)
+                            )
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -2568,12 +2820,18 @@ fun ChannelsGridContent(
                                     errorMessage = "Por favor, digite o nome do canal."
                                     return@Button
                                 }
-                                if (channelUrlInput.isBlank()) {
-                                    errorMessage = "Por favor, cole ou digite o link da transmissão."
+                                val trimmedUrl = channelUrlInput.trim()
+                                if (trimmedUrl.isBlank()) {
+                                    errorMessage = "Por favor, cole ou digite o link da transmissão ou o código <iframe>."
                                     return@Button
                                 }
-                                if (!channelUrlInput.startsWith("http://") && !channelUrlInput.startsWith("https://") && !channelUrlInput.startsWith("rtmp://")) {
-                                    errorMessage = "O link deve começar com http://, https:// ou rtmp://"
+                                val isIframe = trimmedUrl.contains("<iframe", ignoreCase = true) || isIframeOption
+                                val isValidUrl = trimmedUrl.startsWith("http://", ignoreCase = true) ||
+                                                trimmedUrl.startsWith("https://", ignoreCase = true) ||
+                                                trimmedUrl.startsWith("rtmp://", ignoreCase = true)
+
+                                if (!isIframe && !isValidUrl) {
+                                    errorMessage = "O link deve começar com http://, https://, rtmp:// ou ser um código <iframe>."
                                     return@Button
                                 }
 
@@ -2590,8 +2848,9 @@ fun ChannelsGridContent(
                                 onAddQuickChannel(
                                     channelTitleInput.trim(),
                                     channelSubtitleInput.trim(),
-                                    channelUrlInput.trim(),
-                                    isWebPlayerOption,
+                                    trimmedUrl,
+                                    if (isIframe) true else isWebPlayerOption,
+                                    isIframe,
                                     finalCategory,
                                     channelIsWorkingInput,
                                     channelLogoUrlInput.trim().ifBlank { null }
@@ -2922,12 +3181,17 @@ fun ChannelsGridContent(
                     // Campo: Link do Canal com botão de Colar
                     OutlinedTextField(
                         value = editUrlInput,
-                        onValueChange = {
-                            editUrlInput = it
+                        onValueChange = { text ->
+                            val processed = text
+                            if (processed.contains("<iframe", ignoreCase = true)) {
+                                editIsWebPlayer = true
+                                editIsIframe = true
+                            }
+                            editUrlInput = processed
                             editErrorMessage = null
                         },
-                        label = { Text("Link da Transmissão (URL / m3u8 / Web)") },
-                        placeholder = { Text("https://exemplo.com/stream.m3u8") },
+                        label = { Text("Link da Transmissão (URL ou Código <iframe>)") },
+                        placeholder = { Text("https://... ou <iframe src=\"...\"></iframe>") },
                         singleLine = false,
                         maxLines = 3,
                         trailingIcon = {
@@ -2935,7 +3199,12 @@ fun ChannelsGridContent(
                                 onClick = {
                                     val clip = clipboardManager.getText()?.text
                                     if (!clip.isNullOrBlank()) {
-                                        editUrlInput = clip.trim()
+                                        val processed = clip.trim()
+                                        if (processed.contains("<iframe", ignoreCase = true)) {
+                                            editIsWebPlayer = true
+                                            editIsIframe = true
+                                        }
+                                        editUrlInput = processed
                                         editErrorMessage = null
                                     }
                                 },
@@ -2958,6 +3227,54 @@ fun ChannelsGridContent(
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
+
+                    // Switch para Incorporação via <iframe>
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Language,
+                                    contentDescription = null,
+                                    tint = StadiumCyanSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Incorporação via <iframe>",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Text(
+                                text = "Tratar transmissão como <iframe> incorporado no player",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        androidx.compose.material3.Switch(
+                            checked = editIsIframe,
+                            onCheckedChange = { 
+                                editIsIframe = it
+                                if (it) editIsWebPlayer = true
+                            },
+                            modifier = Modifier.testTag("switch_edit_iframe_option"),
+                            colors = androidx.compose.material3.SwitchDefaults.colors(
+                                checkedThumbColor = StadiumCyanSecondary,
+                                checkedTrackColor = StadiumCyanSecondary.copy(alpha = 0.4f)
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Switch para Forçar Player Web
                     Row(
@@ -3053,12 +3370,18 @@ fun ChannelsGridContent(
                                     editErrorMessage = "Por favor, digite o nome do canal."
                                     return@Button
                                 }
-                                if (editUrlInput.isBlank()) {
-                                    editErrorMessage = "Por favor, cole ou digite o link da transmissão."
+                                val trimmedEditUrl = editUrlInput.trim()
+                                if (trimmedEditUrl.isBlank()) {
+                                    editErrorMessage = "Por favor, cole ou digite o link da transmissão ou o código <iframe>."
                                     return@Button
                                 }
-                                if (!editUrlInput.startsWith("http://") && !editUrlInput.startsWith("https://") && !editUrlInput.startsWith("rtmp://")) {
-                                    editErrorMessage = "O link deve começar com http://, https:// ou rtmp://"
+                                val isIframe = trimmedEditUrl.contains("<iframe", ignoreCase = true) || editIsIframe
+                                val isValidUrl = trimmedEditUrl.startsWith("http://", ignoreCase = true) ||
+                                                trimmedEditUrl.startsWith("https://", ignoreCase = true) ||
+                                                trimmedEditUrl.startsWith("rtmp://", ignoreCase = true)
+
+                                if (!isIframe && !isValidUrl) {
+                                    editErrorMessage = "O link deve começar com http://, https://, rtmp:// ou ser um código <iframe>."
                                     return@Button
                                 }
 
@@ -3076,8 +3399,9 @@ fun ChannelsGridContent(
                                     targetChannel.id,
                                     editTitleInput.trim(),
                                     editSubtitleInput.trim(),
-                                    editUrlInput.trim(),
-                                    editIsWebPlayer,
+                                    trimmedEditUrl,
+                                    if (isIframe) true else editIsWebPlayer,
+                                    isIframe,
                                     finalEditCategory,
                                     editIsWorking,
                                     editLogoUrlInput.trim()
@@ -3574,9 +3898,12 @@ fun SupportContent(
     networkStatus: NetworkStatus,
     paymentSetting: PaymentSetting = PaymentSetting(),
     pendingPaymentRequests: List<PaymentRequestItem> = emptyList(),
+    onUpdatePaymentSetting: (String, Long, (Boolean, String?) -> Unit) -> Unit = { _, _, _ -> },
     onUpdatePaymentUrl: (String, (Boolean, String?) -> Unit) -> Unit = { _, _ -> },
     onCreatePaymentRequest: ((Boolean, String) -> Unit) -> Unit = {},
-    onConfirmManualPayment: (PaymentRequestItem, (Boolean, String) -> Unit) -> Unit = { _, _ -> }
+    onConfirmManualPayment: (PaymentRequestItem, (Boolean, String) -> Unit) -> Unit = { _, _ -> },
+    onOpenWebAdmin: () -> Unit = {},
+    onUpdateWebAdminUrl: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -3592,8 +3919,10 @@ fun SupportContent(
     var versionNameInput by remember(uiState.latestVersionName) { mutableStateOf(uiState.latestVersionName) }
     var apkUrlInput by remember(uiState.latestApkUrl) { mutableStateOf(uiState.latestApkUrl) }
 
-    // Estado do Link de Pagamento no Painel Admin
+    // Estado do Link de Pagamento e Valor no Painel Admin
+    var hasClickedPayNowSupport by remember { mutableStateOf(false) }
     var paymentUrlInput by remember(paymentSetting.paymentUrl) { mutableStateOf(paymentSetting.paymentUrl) }
+    var renewalAmountInput by remember(paymentSetting.amountCents) { mutableStateOf(paymentSetting.getAmountInReaisString()) }
     var isSavingPaymentUrl by remember { mutableStateOf(false) }
     var isSubmittingPaymentRequest by remember { mutableStateOf(false) }
     var confirmingRequestId by remember { mutableStateOf<String?>(null) }
@@ -3872,6 +4201,7 @@ fun SupportContent(
 
                         Button(
                             onClick = {
+                                hasClickedPayNowSupport = true
                                 try {
                                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(effectivePaymentUrl)).apply {
                                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -3898,67 +4228,73 @@ fun SupportContent(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "PAGAR AGORA (R$ 10,00)",
+                                text = "PAGAR AGORA (${paymentSetting.getFormattedAmount()})",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Botão 2: JÁ FIZ O PAGAMENTO (Cria solicitação de confirmação para o Admin)
-                        OutlinedButton(
-                            onClick = {
-                                if (!isSubmittingPaymentRequest) {
-                                    isSubmittingPaymentRequest = true
-                                    onCreatePaymentRequest { success, msg ->
-                                        isSubmittingPaymentRequest = false
-                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        // Botão 2: JÁ FIZ O PAGAMENTO (Aparece apenas após o usuário clicar em PAGAR AGORA)
+                        AnimatedVisibility(
+                            visible = hasClickedPayNowSupport,
+                            enter = fadeIn() + expandVertically()
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        if (!isSubmittingPaymentRequest) {
+                                            isSubmittingPaymentRequest = true
+                                            onCreatePaymentRequest { success, msg ->
+                                                isSubmittingPaymentRequest = false
+                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    },
+                                    enabled = !isSubmittingPaymentRequest,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("btn_already_paid_support"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = StadiumCyanSecondary
+                                    ),
+                                    border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.6f))
+                                ) {
+                                    if (isSubmittingPaymentRequest) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            color = StadiumCyanSecondary,
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Enviando solicitação...", fontWeight = FontWeight.Bold)
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircleOutline,
+                                            contentDescription = "Já fiz o pagamento",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("JÁ FIZ O PAGAMENTO (AVISAR ADMIN)", fontWeight = FontWeight.Bold)
                                     }
                                 }
-                            },
-                            enabled = !isSubmittingPaymentRequest,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("btn_already_paid_support"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = StadiumCyanSecondary
-                            ),
-                            border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.6f))
-                        ) {
-                            if (isSubmittingPaymentRequest) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = StadiumCyanSecondary,
-                                    strokeWidth = 2.dp
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    text = "Após realizar o pagamento pelo link acima, clique em 'JÁ FIZ O PAGAMENTO'. O administrador confirmará o recebimento e liberará seus 30 dias.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Enviando solicitação...", fontWeight = FontWeight.Bold)
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircleOutline,
-                                    contentDescription = "Já fiz o pagamento",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("JÁ FIZ O PAGAMENTO (AVISAR ADMIN)", fontWeight = FontWeight.Bold)
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "Após realizar o pagamento pelo link acima, clique em 'JÁ FIZ O PAGAMENTO'. O administrador confirmará o recebimento e liberará seus 30 dias.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp
-                        )
                     }
 
                     // =========================================================
-                    // PAINEL DE CONFIGURAÇÃO DE PAGAMENTO (APENAS ADMIN)
+                    // PAINEL DE CONFIGURAÇÃO DE PAGAMENTO & VALOR (APENAS ADMIN)
                     // =========================================================
                     if (isAdmin) {
                         Spacer(modifier = Modifier.height(16.dp))
@@ -3981,7 +4317,7 @@ fun SupportContent(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Configuração do Link de Pagamento (Admin)",
+                                        text = "Configuração de Pagamento & Renovação (Admin)",
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = StadiumGreenPrimary
@@ -3991,13 +4327,31 @@ fun SupportContent(
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 Text(
-                                    text = "Cadastre ou altere o link de checkout da InfinitePay utilizado pelos usuários para pagamento.",
+                                    text = "Defina o link de checkout da InfinitePay e o valor da renovação mensal exibido aos usuários.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp
                                 )
 
                                 Spacer(modifier = Modifier.height(10.dp))
+
+                                OutlinedTextField(
+                                    value = renewalAmountInput,
+                                    onValueChange = { renewalAmountInput = it },
+                                    label = { Text("Valor da Renovação em Reais (ex: 10,00 ou 15,00)") },
+                                    placeholder = { Text("10,00") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("input_admin_renewal_amount"),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = StadiumGreenPrimary,
+                                        focusedLabelColor = StadiumGreenPrimary,
+                                        cursorColor = StadiumGreenPrimary
+                                    )
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
 
                                 OutlinedTextField(
                                     value = paymentUrlInput,
@@ -4019,15 +4373,17 @@ fun SupportContent(
 
                                 Button(
                                     onClick = {
-                                        val trimmed = paymentUrlInput.trim()
-                                        if (trimmed.isNotBlank()) {
+                                        val trimmedUrl = paymentUrlInput.trim()
+                                        val parsedAmount = renewalAmountInput.replace(",", ".").toDoubleOrNull() ?: 10.0
+                                        val amountCents = (parsedAmount * 100).toLong().coerceAtLeast(100L)
+                                        if (trimmedUrl.isNotBlank()) {
                                             isSavingPaymentUrl = true
-                                            onUpdatePaymentUrl(trimmed) { success, err ->
+                                            onUpdatePaymentSetting(trimmedUrl, amountCents) { success, err ->
                                                 isSavingPaymentUrl = false
                                                 if (success) {
-                                                    Toast.makeText(context, "Link de pagamento atualizado com sucesso!", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Configurações de pagamento e valor atualizadas com sucesso!", Toast.LENGTH_SHORT).show()
                                                 } else {
-                                                    Toast.makeText(context, err ?: "Erro ao salvar link.", Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, err ?: "Erro ao salvar configurações.", Toast.LENGTH_LONG).show()
                                                 }
                                             }
                                         } else {
@@ -4048,7 +4404,7 @@ fun SupportContent(
                                     } else {
                                         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Salvar Link de Pagamento", fontWeight = FontWeight.Bold)
+                                        Text("Salvar Configurações de Pagamento", fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -4417,7 +4773,7 @@ fun SupportContent(
                                 OutlinedTextField(
                                     value = versionNameInput,
                                     onValueChange = { versionNameInput = it },
-                                    label = { Text("Número da Versão (ex: 1.2.0)") },
+                                    label = { Text("Número da Versão (ex: 1.3.0)") },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true
                                 )
@@ -4797,6 +5153,228 @@ fun SupportContent(
                             Text("Alterar Número do WhatsApp (Admin)", fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+            }
+        }
+
+        // Painel do Admin: Painel Web no Navegador (Gerenciamento de Canais, Filmes e Séries)
+        if (isAdmin) {
+            item {
+                var showEditWebUrlDialog by remember { mutableStateOf(false) }
+                var tempWebUrlInput by remember(uiState.webAdminUrl) { mutableStateOf(uiState.webAdminUrl) }
+
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    border = BorderStroke(1.dp, StadiumGreenPrimary.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_web_panel_card")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = StadiumGreenPrimary.copy(alpha = 0.15f),
+                                    modifier = Modifier.size(44.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Language,
+                                            contentDescription = "Painel Web",
+                                            tint = StadiumGreenPrimary,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Painel Web do Administrador",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Adicione canais, filmes e séries pelo navegador",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = StadiumGreenPrimary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = "Abra este painel no seu computador ou no navegador do celular para cadastrar e gerenciar canais, filmes e séries de forma prática. Tudo que você salvar lá aparece no aplicativo instantaneamente em tempo real!",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // URL Preview Box
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = uiState.webAdminUrl.ifBlank { "https://futeplayer-2b630.web.app" },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                IconButton(
+                                    onClick = {
+                                        tempWebUrlInput = uiState.webAdminUrl
+                                        showEditWebUrlDialog = true
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Editar URL",
+                                        tint = StadiumCyanSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Botão Principal: Abrir Painel no Navegador
+                        Button(
+                            onClick = onOpenWebAdmin,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp)
+                                .testTag("btn_open_web_admin_browser"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = StadiumGreenPrimary,
+                                contentColor = Color.Black
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Abrir Painel no Navegador",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Botão Secundário: Copiar Link do Painel
+                        OutlinedButton(
+                            onClick = {
+                                val url = uiState.webAdminUrl.ifBlank { "https://futeplayer-2b630.web.app" }
+                                clipboardManager.setText(AnnotatedString(url))
+                                Toast.makeText(context, "Link do painel copiado: $url", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp)
+                                .testTag("btn_copy_web_admin_url"),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = StadiumCyanSecondary
+                            ),
+                            border = BorderStroke(1.dp, StadiumCyanSecondary.copy(alpha = 0.6f)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Copiar Link do Painel (para PC)",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+
+                if (showEditWebUrlDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showEditWebUrlDialog = false },
+                        title = {
+                            Text("Configurar Link do Painel Web", fontWeight = FontWeight.Bold)
+                        },
+                        text = {
+                            Column {
+                                Text(
+                                    "Informe a URL onde o painel web está hospedado (Firebase Hosting, Vercel ou servidor local):",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = tempWebUrlInput,
+                                    onValueChange = { tempWebUrlInput = it },
+                                    label = { Text("URL do Painel Web") },
+                                    placeholder = { Text("https://futeplayer-2b630.web.app") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    val finalUrl = tempWebUrlInput.trim().ifBlank { "https://futeplayer-2b630.web.app" }
+                                    onUpdateWebAdminUrl(finalUrl)
+                                    showEditWebUrlDialog = false
+                                    Toast.makeText(context, "Link do Painel Web atualizado!", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = StadiumGreenPrimary, contentColor = Color.Black)
+                            ) {
+                                Text("Salvar Link", fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showEditWebUrlDialog = false }) {
+                                Text("Cancelar")
+                            }
+                        }
+                    )
                 }
             }
         }
